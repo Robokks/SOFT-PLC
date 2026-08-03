@@ -12,7 +12,7 @@ is a thin executable that links against it.
 
 ```
 include/softplc/
-  core/   scan_engine.hpp, program.hpp, native_program.hpp
+  core/   scan_engine.hpp, program.hpp, native_program.hpp, rt_scheduling.hpp
   tags/   value.hpp, tag.hpp, tag_store.hpp
   io/     io_driver.hpp, simulated_io_driver.hpp
   st/     token.hpp, lexer.hpp, ast.hpp, parser.hpp, interpreter.hpp, st_program.hpp
@@ -32,7 +32,10 @@ API so tests can drive deterministic scans without relying on real timing.
 
 Overruns (a scan taking longer than the configured cycle time) are recorded
 in `ScanDiagnostics` (`cycleCount`, `overrunCount`, `lastCycleDuration`,
-`maxCycleDuration`) rather than treated as fatal.
+`maxCycleDuration`, `minCycleDuration`) rather than treated as fatal. The
+threaded loop additionally tracks `lastWakeJitter`/`maxWakeJitter` (how late
+the thread woke relative to its fixed schedule) and `resyncCount` (see
+"Real-time characteristics" below).
 
 `IProgram` (in `core/program.hpp`) is the abstraction a scan executes each
 cycle — named after the IEC 61131-3 POU (Program Organization Unit) concept
@@ -92,11 +95,72 @@ Minimal Phase 1 subset:
 the first scan, so `Interpreter::run()` never performs name lookups. See
 `docs/roadmap.md` for what's explicitly out of scope for Phase 1.
 
+## Real-time characteristics
+
+Out of the box, on a stock (non-PREEMPT_RT) Linux or Windows kernel, the scan
+engine is **soft real-time**: it holds a fixed cadence and the scan-cycle hot
+path (`TagStore::read`/`write`, `Interpreter::evaluate`/`execStmt`) performs
+no heap allocation for any tag type except `STRING` (avoid `STRING` tags in
+timing-critical logic), but the OS scheduler can still preempt the scan
+thread for milliseconds under load, and a `WHILE` loop is capped at
+1,000,000 iterations per scan rather than having a proven worst-case
+execution time. Occasional missed deadlines are possible; nothing here
+guarantees they can't happen.
+
+`core/rt_scheduling.hpp` (`softplc::core::rt`) adds opt-in OS-level
+scheduling, applied to the scan thread itself via
+`ScanEngine::setRtPolicy()` (call before `start()`):
+- `enableRealtimePriority` — `SCHED_FIFO` on Linux (priority clamped into
+  `sched_get_priority_min/max`), `THREAD_PRIORITY_TIME_CRITICAL` on Windows.
+- `cpuAffinity` — pins the scan thread to one logical CPU.
+- `lockMemory` — `mlockall(MCL_CURRENT | MCL_FUTURE)` on Linux (no
+  process-wide equivalent on Windows, so it's a documented no-op there);
+  paired with a small fixed-size `prefaultStack()` call so an early stack
+  page fault doesn't itself add latency after memory is locked.
+
+Every one of these is best-effort: missing privileges (no `CAP_SYS_NICE`/
+root on Linux, a container's default `RLIMIT_MEMLOCK`) degrade to a warning
+in `ScanEngine::rtApplyResult()` rather than a crash or thrown exception.
+`ScanEngine::start()` blocks until the scan thread has actually applied the
+policy to itself, so `rtApplyResult()` is race-free and accurate as soon as
+`start()` returns. `plc_runner` exposes this via `--rt-priority=N`,
+`--rt-affinity=N`, and `--lock-memory` (all off by default).
+
+Raising `RLIMIT_MEMLOCK` itself needs root/`CAP_SYS_RESOURCE` and can't be
+done reliably from inside the process — it's a deployment-time setting
+(systemd `LimitMEMLOCK=infinity`, `/etc/security/limits.conf`, or a
+container's `--ulimit memlock=-1`), not something `applyRealtimePolicy()`
+attempts on your behalf.
+
+**Hard real-time** (a guaranteed deadline, not just a statistically tight
+one) is not achieved by this alone and requires, on top of the above: a
+PREEMPT_RT-patched Linux kernel, and CPU isolation (`isolcpus`, `nohz_full`)
+so the scan thread's core isn't shared with other work. **Windows has no
+equivalent hard-real-time story** without specialized RTOS extensions
+(explicitly out of scope for this project). Actual jitter under load,
+`SCHED_FIFO` preemption behavior, and whether memory locking eliminates
+page-fault spikes should be measured on the real target with `cyclictest`
+(from the `rt-tests` package) against a PREEMPT_RT kernel — this is a field
+verification step, not something exercised in this repository's CI/test
+suite (which runs unprivileged and on a non-RT kernel).
+
+**Known limitation, deliberately not fixed yet**: `TagStore`'s
+`shared_mutex` is a potential priority-inversion / unbounded-wait source
+once an external consumer (a future OPC-UA/Modbus server) holds the shared
+(read) lock while the scan thread's `write()` needs the exclusive lock. No
+such consumer exists yet, so this hasn't been redesigned — see
+`docs/roadmap.md`.
+
 ## Testing
 
 Each layer is tested in isolation (`tests/tags`, `tests/core`, `tests/io`,
 `tests/st/{lexer,parser,interpreter}_test.cpp`) using GoogleTest, fetched via
 CMake `FetchContent`. `ScanEngine` is tested primarily through `runOnce()`
-for determinism; one test exercises the real threaded `start()`/`stop()`
-loop. `SOFTPLC_ENABLE_SANITIZERS` (CMake option) turns on
-AddressSanitizer/UndefinedBehaviorSanitizer for dev/CI builds.
+for determinism; a few tests exercise the real threaded `start()`/`stop()`
+loop, including that falling behind schedule increments `resyncCount`.
+`tests/core/rt_scheduling_test.cpp` verifies `applyRealtimePolicy()`
+tolerantly (never throws; if a privileged operation didn't take effect, a
+warning must explain why) so the suite passes identically whether run
+unprivileged (the common case) or as root. `SOFTPLC_ENABLE_SANITIZERS`
+(CMake option) turns on AddressSanitizer/UndefinedBehaviorSanitizer for
+dev/CI builds.

@@ -82,3 +82,76 @@ TEST(ScanEngineTest, StartStopRunsBackgroundLoopForSeveralCycles) {
     EXPECT_GT(executeCount.load(), 0);
     EXPECT_FALSE(engine.isRunning());
 }
+
+TEST(ScanEngineTest, RunOnceUpdatesMinCycleDuration) {
+    tags::TagStore tags;
+    RecordingIoDriver io;
+    auto program = std::make_shared<core::NativeProgram>("noop", [](core::ScanContext&) {});
+
+    core::ScanEngine engine(tags, io, program, std::chrono::milliseconds(10));
+    EXPECT_EQ(engine.diagnostics().minCycleDuration, std::chrono::microseconds::max());
+
+    engine.runOnce();
+
+    EXPECT_LT(engine.diagnostics().minCycleDuration, std::chrono::microseconds::max());
+}
+
+TEST(ScanEngineTest, DefaultRtPolicyIsANoOpAfterStart) {
+    tags::TagStore tags;
+    RecordingIoDriver io;
+    auto program = std::make_shared<core::NativeProgram>("noop", [](core::ScanContext&) {});
+
+    core::ScanEngine engine(tags, io, program, std::chrono::milliseconds(5));
+    engine.start();
+    engine.stop();
+
+    EXPECT_FALSE(engine.rtApplyResult().prioritySet);
+    EXPECT_FALSE(engine.rtApplyResult().affinitySet);
+    EXPECT_FALSE(engine.rtApplyResult().memoryLocked);
+    EXPECT_TRUE(engine.rtApplyResult().warnings.empty());
+}
+
+TEST(ScanEngineTest, StartAppliesRtPolicySynchronouslyBeforeReturning) {
+    const unsigned available = std::thread::hardware_concurrency();
+    if (available == 0) {
+        GTEST_SKIP() << "hardware_concurrency() is unknown on this platform";
+    }
+
+    tags::TagStore tags;
+    RecordingIoDriver io;
+    auto program = std::make_shared<core::NativeProgram>("noop", [](core::ScanContext&) {});
+
+    core::ScanEngine engine(tags, io, program, std::chrono::milliseconds(5));
+    core::rt::RtPolicy policy;
+    policy.cpuAffinity = available - 1;
+    engine.setRtPolicy(policy);
+
+    engine.start();
+    // start() blocks until the scan thread has applied the policy to itself, so
+    // this must already be populated (race-free) by the time start() returns.
+    const bool affinityOutcomeKnown =
+        engine.rtApplyResult().affinitySet || !engine.rtApplyResult().warnings.empty();
+    engine.stop();
+
+    EXPECT_TRUE(affinityOutcomeKnown);
+}
+
+TEST(ScanEngineTest, FallingBehindScheduleIncrementsResyncCount) {
+    tags::TagStore tags;
+    RecordingIoDriver io;
+    auto program = std::make_shared<core::NativeProgram>("slow", [](core::ScanContext&) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    });
+
+    core::ScanEngine engine(tags, io, program, std::chrono::milliseconds(5));
+    engine.start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    engine.stop();
+
+    // Each resync deliberately pushes nextTick into the future (see run()'s resync
+    // branch), so wake jitter in this always-behind scenario tends to read as
+    // negative/near-zero rather than positive — resyncCount, not maxWakeJitter, is
+    // the meaningful signal here. Positive jitter reflects genuine OS scheduling
+    // delay before a sleep_until() wake, which this test doesn't exercise.
+    EXPECT_GE(engine.diagnostics().resyncCount, 1u);
+}

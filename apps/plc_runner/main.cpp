@@ -4,9 +4,12 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <string>
 #include <thread>
 #include <type_traits>
+#include <vector>
 
+#include "softplc/core/rt_scheduling.hpp"
 #include "softplc/core/scan_engine.hpp"
 #include "softplc/io/simulated_io_driver.hpp"
 #include "softplc/st/st_program.hpp"
@@ -45,16 +48,40 @@ std::string valueToString(const softplc::tags::Value& value) {
         value);
 }
 
+bool startsWith(const std::string& s, const std::string& prefix) {
+    return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 2) {
-        std::cerr << "usage: " << argv[0] << " <program.st> [cycle_time_ms]\n";
+    std::vector<std::string> positional;
+    softplc::core::rt::RtPolicy rtPolicy;
+
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (startsWith(arg, "--rt-priority=")) {
+            rtPolicy.enableRealtimePriority = true;
+            rtPolicy.priority = std::stoi(arg.substr(std::string("--rt-priority=").size()));
+        } else if (startsWith(arg, "--rt-affinity=")) {
+            rtPolicy.cpuAffinity =
+                static_cast<unsigned>(std::stoi(arg.substr(std::string("--rt-affinity=").size())));
+        } else if (arg == "--lock-memory") {
+            rtPolicy.lockMemory = true;
+        } else {
+            positional.push_back(arg);
+        }
+    }
+
+    if (positional.empty()) {
+        std::cerr << "usage: " << argv[0]
+                  << " <program.st> [cycle_time_ms] [--rt-priority=N] [--rt-affinity=N] "
+                     "[--lock-memory]\n";
         return 1;
     }
 
-    const std::string path = argv[1];
-    const int cycleMs = argc >= 3 ? std::stoi(argv[2]) : 10;
+    const std::string path = positional[0];
+    const int cycleMs = positional.size() >= 2 ? std::stoi(positional[1]) : 10;
 
     softplc::tags::TagStore tags;
     std::shared_ptr<softplc::st::StProgram> program;
@@ -71,9 +98,14 @@ int main(int argc, char** argv) {
 
     softplc::io::SimulatedIoDriver io;
     softplc::core::ScanEngine engine(tags, io, program, std::chrono::milliseconds(cycleMs));
+    engine.setRtPolicy(rtPolicy);
 
     std::signal(SIGINT, handleSigint);
     engine.start();
+
+    for (const auto& warning : engine.rtApplyResult().warnings) {
+        std::cerr << "rt warning: " << warning << '\n';
+    }
 
     std::cout << "running (Ctrl+C to stop)...\n";
     while (!g_stopRequested) {
@@ -88,6 +120,8 @@ int main(int argc, char** argv) {
 
     const auto& diag = engine.diagnostics();
     std::cout << "stopped. cycles=" << diag.cycleCount << " overruns=" << diag.overrunCount
-              << " maxCycleDuration=" << diag.maxCycleDuration.count() << "us\n";
+              << " maxCycleDuration=" << diag.maxCycleDuration.count() << "us"
+              << " maxWakeJitter=" << diag.maxWakeJitter.count() << "us"
+              << " resyncs=" << diag.resyncCount << '\n';
     return 0;
 }

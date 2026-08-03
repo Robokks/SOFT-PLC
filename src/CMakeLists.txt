@@ -3,6 +3,7 @@ add_library(softplc_core STATIC
     tags/tag_store.cpp
     io/simulated_io_driver.cpp
     core/scan_engine.cpp
+    core/rt_scheduling.cpp
     st/lexer.cpp
     st/parser.cpp
     st/interpreter.cpp

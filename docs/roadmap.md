@@ -2,8 +2,10 @@
 
 ## Phase 1 (this repository, current state)
 
-Core scan-cycle engine, thread-safe tag database, simulated I/O, and a real
-minimal Structured Text pipeline. See `docs/architecture.md`.
+Core scan-cycle engine, thread-safe tag database, simulated I/O, a real
+minimal Structured Text pipeline, and opt-in real-time OS scheduling
+(priority/affinity/memory locking via `core/rt_scheduling`). See
+`docs/architecture.md`.
 
 Explicitly out of scope for Phase 1's ST subset (parser will reject these):
 - `FOR` loops, `CASE` statements, `REPEAT` loops
@@ -28,7 +30,13 @@ Explicitly out of scope for Phase 1's ST subset (parser will reject these):
   — all implementing `IIoDriver`, requiring no `ScanEngine` changes.
 - **External tag access**: OPC-UA and/or Modbus server exposing `TagStore`
   to HMI/SCADA clients, exercising the `shared_mutex` concurrent-reader path
-  the store was designed for.
+  the store was designed for. Once such a consumer exists, revisit
+  `TagStore`'s locking: a `shared_mutex` is a priority-inversion / unbounded-
+  wait risk once something can hold the shared (read) lock while the scan
+  thread's `write()` needs the exclusive lock — deliberately not fixed now
+  since there's no real consumer yet to justify the complexity. Likely fix:
+  per-tag atomics or a seqlock/double-buffer scheme for scalar types, to
+  bound the scan thread's worst-case wait time.
 - **Expanded ST language surface**: `FOR`, `CASE`, function blocks/functions,
   arrays/structs, remaining elementary types.
 - **Persistence**: retentive (`VAR RETAIN`) variables surviving a restart.

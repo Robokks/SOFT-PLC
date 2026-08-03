@@ -6,9 +6,10 @@ The long-term goal is to support all four IEC 61131-3 programming languages
 (Ladder Logic, Structured Text, Function Block Diagram, Instruction List).
 **Phase 1** (this repository's current state) builds the foundational
 runtime: a scan-cycle engine, a thread-safe tag/memory database, an I/O
-abstraction, and a minimal but real Structured Text (ST) execution pipeline.
-See `docs/architecture.md` for the design and `docs/roadmap.md` for what's
-next.
+abstraction, a minimal but real Structured Text (ST) execution pipeline, and
+opt-in real-time OS scheduling (priority/affinity/memory locking). See
+`docs/architecture.md` for the design — including what "real-time" does and
+doesn't mean here — and `docs/roadmap.md` for what's next.
 
 ## Building
 
@@ -33,7 +34,8 @@ unavailable).
 ./build/apps/plc_runner/plc_runner examples/blink/blink.st
 ```
 
-See `examples/blink/README.md` for details.
+See `examples/blink/README.md` for details, including the optional
+`--rt-priority=N` / `--rt-affinity=N` / `--lock-memory` flags.
 
 ## Layout
 

@@ -14,7 +14,16 @@ void ScanEngine::start() {
     if (thread_.joinable()) {
         return;
     }
+    {
+        std::lock_guard lock(rtReadyMutex_);
+        rtReady_ = false;
+    }
     thread_ = std::jthread([this](std::stop_token stopToken) { run(stopToken); });
+
+    // Block until the scan thread has applied rtPolicy_ to itself, so
+    // rtApplyResult() is race-free and accurate as soon as start() returns.
+    std::unique_lock lock(rtReadyMutex_);
+    rtReadyCv_.wait(lock, [this] { return rtReady_; });
 }
 
 void ScanEngine::stop() {
@@ -26,6 +35,13 @@ void ScanEngine::stop() {
 }
 
 bool ScanEngine::isRunning() const { return thread_.joinable(); }
+
+void ScanEngine::setRtPolicy(rt::RtPolicy policy) {
+    if (thread_.joinable()) {
+        return;
+    }
+    rtPolicy_ = policy;
+}
 
 void ScanEngine::runOnce() {
     const auto cycleStart = std::chrono::steady_clock::now();
@@ -50,16 +66,48 @@ void ScanEngine::runOnce() {
     diagnostics_.cycleCount++;
     diagnostics_.lastCycleDuration = duration;
     diagnostics_.maxCycleDuration = std::max(diagnostics_.maxCycleDuration, duration);
+    diagnostics_.minCycleDuration = std::min(diagnostics_.minCycleDuration, duration);
     if (duration > cycleTime_) {
         diagnostics_.overrunCount++;
     }
 }
 
 void ScanEngine::run(std::stop_token stopToken) {
+    if (rtPolicy_.lockMemory) {
+        rt::prefaultStack();
+    }
+    rtApplyResult_ = rt::applyRealtimePolicy(rtPolicy_);
+    {
+        std::lock_guard lock(rtReadyMutex_);
+        rtReady_ = true;
+    }
+    rtReadyCv_.notify_all();
+
+    // Hold a fixed schedule (nextTick accumulates by cycleTime_ each iteration)
+    // rather than resetting the baseline to now() every loop: resetting would
+    // silently absorb any OS scheduling delay into cadence drift instead of
+    // surfacing it as jitter.
+    auto nextTick = std::chrono::steady_clock::now();
     while (!stopToken.stop_requested()) {
-        const auto tickStart = std::chrono::steady_clock::now();
+        const auto wake = std::chrono::steady_clock::now();
+        // First iteration's jitter reading is near-zero/meaningless (nextTick was
+        // just set to the current time above) — expected, not a bug.
+        const auto jitter = std::chrono::duration_cast<std::chrono::microseconds>(wake - nextTick);
+        diagnostics_.lastWakeJitter = jitter;
+        diagnostics_.maxWakeJitter = std::max(diagnostics_.maxWakeJitter, jitter);
+
         runOnce();
-        std::this_thread::sleep_until(tickStart + cycleTime_);
+
+        nextTick += cycleTime_;
+        if (nextTick <= std::chrono::steady_clock::now()) {
+            // Fell a full cycle or more behind: resync to "now + one cycle" rather
+            // than firing several back-to-back catch-up scans, which would just
+            // compound overruns under sustained overload.
+            diagnostics_.resyncCount++;
+            nextTick = std::chrono::steady_clock::now() + cycleTime_;
+        } else {
+            std::this_thread::sleep_until(nextTick);
+        }
     }
 }
 
