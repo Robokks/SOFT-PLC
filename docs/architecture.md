@@ -14,12 +14,15 @@ is a thin executable that links against it.
 include/softplc/
   core/   scan_engine.hpp, program.hpp, native_program.hpp, rt_scheduling.hpp
   tags/   value.hpp, tag.hpp, tag_store.hpp
-  io/     io_driver.hpp, simulated_io_driver.hpp
+  io/     io_driver.hpp, simulated_io_driver.hpp,
+          modbus_mapping.hpp, modbus_client.hpp, modbus_tcp_driver.hpp
+  net/    tcp_socket.hpp, tcp_listener.hpp
   st/     token.hpp, lexer.hpp, ast.hpp, parser.hpp, interpreter.hpp, st_program.hpp
 src/                        (matching .cpp files)
 apps/plc_runner/            main.cpp — loads an .st file and runs the engine
 examples/blink/             a minimal ST program toggling a direct-addressed output
-tests/                      GoogleTest unit tests, mirroring src/
+tests/                      GoogleTest unit tests, mirroring src/, plus
+                             tests/support/mock_modbus_server.{hpp,cpp}
 ```
 
 ## Scan-cycle engine (`core/`)
@@ -64,10 +67,9 @@ during a scan.
 ## I/O abstraction (`io/`)
 
 `IIoDriver` has two methods, `readInputs()`/`writeOutputs()`, called by
-`ScanEngine` around program execution. Phase 1 ships only
-`SimulatedIoDriver` (settable simulated inputs, recorded outputs) — no real
-hardware yet — but the interface is shaped so a future Modbus/GPIO driver
-needs no engine changes.
+`ScanEngine` around program execution. `SimulatedIoDriver` (settable
+simulated inputs, recorded outputs) and `ModbusTcpIoDriver` (see below) are
+both drop-in implementations — neither requires any `ScanEngine` change.
 
 ## Structured Text (`st/`)
 
@@ -94,6 +96,71 @@ Minimal Phase 1 subset:
 `TagStore`, and resolves every identifier reference to a `TagId` — all before
 the first scan, so `Interpreter::run()` never performs name lookups. See
 `docs/roadmap.md` for what's explicitly out of scope for Phase 1.
+
+## Modbus TCP I/O driver (`io/modbus_*`, `net/`)
+
+`ModbusTcpIoDriver` is a Modbus TCP **client (master)**: it polls real (or,
+in tests, mock) Modbus TCP servers and feeds `%I`/`%Q` tags. It is *not* a
+Modbus server exposing this project's own `TagStore` — that's the separate
+"external tag access" item in `docs/roadmap.md`.
+
+**Never blocks the scan thread on network I/O.** A Modbus round-trip is
+unbounded-latency network I/O; doing it synchronously inside
+`readInputs()`/`writeOutputs()` would directly undermine the real-time work
+above — one slow device could stall an entire scan cycle. Instead, each
+configured device gets its own dedicated background polling thread (not one
+shared poller, so one hung device can't stall polling for every other
+device) maintaining its own TCP connection and an in-memory cache of latest
+known values. `readInputs()`/`writeOutputs()` only ever do fast,
+lock-guarded copies between that cache and `TagStore`.
+
+**Freeze-last-good-value semantics**: a failed poll leaves the cached value
+and its validity flag untouched — never silently replaced with garbage,
+never a crash. A point that has never successfully polled stays at its tag's
+declared default. Each device optionally writes a `healthTagAddress` `BOOL`
+tag every `readInputs()` call, so ST logic can interlock on "device offline"
+directly rather than only a C++ caller being able to observe it.
+
+**Protocol codec is vendored, not hand-written**: `nanoMODBUS`
+(`debevv/nanoMODBUS`, MIT-licensed, fetched via CMake `FetchContent` —
+`cmake/FetchNanomodbus.cmake`) implements MBAP/PDU encode/decode/validation.
+It was chosen over `libmodbus` (LGPL v3, clashes with this project's MIT/
+zero-runtime-dependency posture) and other MIT alternatives that lacked a
+portable (non-Linux-only) transport. nanoMODBUS is transport-agnostic — it
+takes read/write callbacks rather than owning sockets — so `net::TcpSocket`
+(a small, generic, cross-platform client socket; first real
+`#ifdef`-gated POSIX-vs-Winsock2 code in this codebase) still supplies the
+actual transport. `net::TcpListener` is the equally generic server-side
+counterpart, used only by the test-only mock server (production Modbus TCP
+here is client-only and never binds/listens).
+
+Two things this project still owns on top of nanoMODBUS: **word order**
+across multi-register values (`DINT`/`REAL` spanning 2 registers is not
+Modbus-spec-defined and varies by device vendor — a per-point `WordOrder`
+config knob) and **error translation** (nanoMODBUS's `nmbs_error` mapped
+into this project's structured, never-throwing `RequestResult`, mirroring
+`core::rt::RtApplyResult`'s convention).
+
+**Tag-to-register mapping** (`modbus_mapping.hpp`): a `ModbusPointMapping`
+binds one IEC tag address to one Modbus register/coil. v1 deliberately
+restricts pairings (enforced by `validateDeviceConfig()`, which throws
+`std::invalid_argument` at construction time, matching
+`TagStore::declare()`'s throw-at-setup convention): `Coil`/`DiscreteInput`
+only pair with `BOOL`; `HoldingRegister`/`InputRegister` only pair with
+`BYTE`/`INT`/`DINT`/`REAL`. `buildBatches()` coalesces strictly-contiguous
+points per register type into one request (capped at the Modbus protocol
+limits), used for both reads and writes.
+
+Like `SimulatedIoDriver`, this driver never declares tags itself — points
+are matched against tags already declared elsewhere (typically an ST
+program's `VAR ... AT %I0.0 ...`), looked up by address each call.
+
+**Known limitation, deliberately not fixed yet**: no gap-tolerant batching
+(a single-register gap between two points always starts a new request, even
+though bridging small gaps could reduce request count), no config-file
+format (devices are configured via a C++ `ModbusDeviceConfig`/
+`ModbusPointMapping` API only — wiring a config file into `apps/plc_runner`
+is future work), and Modbus RTU (serial) is a separate, not-yet-built driver.
 
 ## Real-time characteristics
 
@@ -161,6 +228,17 @@ loop, including that falling behind schedule increments `resyncCount`.
 `tests/core/rt_scheduling_test.cpp` verifies `applyRealtimePolicy()`
 tolerantly (never throws; if a privileged operation didn't take effect, a
 warning must explain why) so the suite passes identically whether run
-unprivileged (the common case) or as root. `SOFTPLC_ENABLE_SANITIZERS`
-(CMake option) turns on AddressSanitizer/UndefinedBehaviorSanitizer for
-dev/CI builds.
+unprivileged (the common case) or as root.
+
+Modbus tests (`tests/net/`, `tests/io/modbus_*_test.cpp`) run against
+`tests/support/mock_modbus_server.hpp`/`.cpp`, itself built on nanoMODBUS's
+*server* mode rather than a hand-rolled byte-level mock — tests exercise the
+same real, spec-correct protocol implementation the production client uses,
+plus fault injection (response delay, dropped responses, mid-session
+disconnect, connection rejection) at the transport layer. One honest gap:
+true connect-*timeout*-under-packet-loss isn't reliably reproducible in a
+hermetic sandbox, so those tests cover connection-refused and the timeout
+plumbing itself rather than literally induced packet loss.
+
+`SOFTPLC_ENABLE_SANITIZERS` (CMake option) turns on AddressSanitizer/
+UndefinedBehaviorSanitizer for dev/CI builds.

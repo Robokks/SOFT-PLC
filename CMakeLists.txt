@@ -28,6 +28,8 @@ if(SOFTPLC_ENABLE_SANITIZERS)
     )
 endif()
 
+include(cmake/FetchNanomodbus.cmake)
+
 add_subdirectory(src)
 add_subdirectory(apps/plc_runner)
 

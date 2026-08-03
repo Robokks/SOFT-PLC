@@ -3,9 +3,10 @@
 ## Phase 1 (this repository, current state)
 
 Core scan-cycle engine, thread-safe tag database, simulated I/O, a real
-minimal Structured Text pipeline, and opt-in real-time OS scheduling
-(priority/affinity/memory locking via `core/rt_scheduling`). See
-`docs/architecture.md`.
+minimal Structured Text pipeline, opt-in real-time OS scheduling
+(priority/affinity/memory locking via `core/rt_scheduling`), and a Modbus
+TCP client (master) I/O driver (`io/modbus_tcp_driver.hpp`, built on the
+vendored `nanoMODBUS` codec). See `docs/architecture.md`.
 
 Explicitly out of scope for Phase 1's ST subset (parser will reject these):
 - `FOR` loops, `CASE` statements, `REPEAT` loops
@@ -26,8 +27,19 @@ Explicitly out of scope for Phase 1's ST subset (parser will reject these):
 - **Task / multi-POU scheduling**: an IEC "Task" concept binding one or more
   programs to independent scan rates/priorities, replacing `ScanEngine`'s
   current single-`IProgram` model.
-- **Real I/O drivers**: Modbus (TCP/RTU), GPIO (e.g. Raspberry Pi), EtherCAT
-  — all implementing `IIoDriver`, requiring no `ScanEngine` changes.
+- **More real I/O drivers**: Modbus RTU (serial), GPIO (e.g. Raspberry Pi),
+  NI DAQmx, SPI/I2C — all implementing `IIoDriver` like `ModbusTcpIoDriver`,
+  requiring no `ScanEngine` changes. `net::TcpSocket`/`TcpListener` are
+  already generic (not Modbus-specific) for reuse by future TCP-based
+  fieldbus work.
+- **Drive communication**: Profinet, EtherCAT — a larger undertaking than
+  Modbus (real-time industrial Ethernet, not plain TCP), likely needing
+  dedicated stacks rather than a hand-rolled protocol layer.
+- **Modbus TCP driver follow-ups**: gap-tolerant batching (a documented,
+  not-yet-implemented optimization — see `docs/architecture.md`), and a
+  config-file format for devices/points (today it's a C++
+  `ModbusDeviceConfig`/`ModbusPointMapping` API only, not wired into
+  `apps/plc_runner`).
 - **External tag access**: OPC-UA and/or Modbus server exposing `TagStore`
   to HMI/SCADA clients, exercising the `shared_mutex` concurrent-reader path
   the store was designed for. Once such a consumer exists, revisit
