@@ -19,8 +19,13 @@ target_compile_features(softplc_options INTERFACE cxx_std_20)
 softplc_apply_warnings(softplc_options)
 
 if(SOFTPLC_ENABLE_SANITIZERS)
-    target_compile_options(softplc_options INTERFACE -fsanitize=address,undefined -fno-omit-frame-pointer)
-    target_link_options(softplc_options INTERFACE -fsanitize=address,undefined)
+    target_compile_options(softplc_options INTERFACE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-fsanitize=address,undefined -fno-omit-frame-pointer>
+        $<$<CXX_COMPILER_ID:MSVC>:/fsanitize=address>
+    )
+    target_link_options(softplc_options INTERFACE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-fsanitize=address,undefined>
+    )
 endif()
 
 add_subdirectory(src)
