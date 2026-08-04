@@ -45,6 +45,12 @@ public:
     // parseCompilationUnit()) so existing single-PROGRAM-only tests/tools keep working.
     StProgramAst parseProgram();
 
+    // Parses a sequence of FUNCTION_BLOCK/FUNCTION definitions only -- no DATA_BLOCK,
+    // no PROGRAM required. Used to load the standard FB library (st/standard_fbs.hpp)
+    // as ordinary PouAsts merged into a user CompilationUnit's pous by
+    // StProgram::load(), rather than a special-cased "intrinsic" FB mechanism.
+    std::vector<PouAst> parsePouLibrary();
+
 private:
     // Which kind of VAR block is being parsed -- controls what's allowed inside it
     // (FB instance declarations, persistent VAR, VAR_TEMP).

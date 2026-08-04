@@ -6,7 +6,10 @@ Core scan-cycle engine, thread-safe tag database, simulated I/O, a real
 minimal Structured Text pipeline — now including `DATA_BLOCK`s and
 user-defined `FUNCTION_BLOCK`/`FUNCTION` POUs with instance/call-site state
 isolation (`st/pou_binder.hpp`; see "Data Blocks, Function Blocks, and
-Functions" in `docs/architecture.md`) — opt-in real-time OS scheduling
+Functions" in `docs/architecture.md`), a textual Ladder Diagram `RUNG`
+statement reusing the same grammar/interpreter (see "Ladder Diagram"), and
+the standard `TON`/`TOF`/`CTU`/`CTD` timer/counter FBs shipped as ST source
+(see "Standard library: TON/TOF/CTU/CTD") — opt-in real-time OS scheduling
 (priority/affinity/memory locking via `core/rt_scheduling`), and a Modbus
 TCP client (master) I/O driver (`io/modbus_tcp_driver.hpp`, built on the
 vendored `nanoMODBUS` codec). See `docs/architecture.md`.
@@ -26,8 +29,6 @@ Explicitly out of scope for Phase 1's ST subset (parser will reject these):
 - `VAR_IN_OUT` pass-by-reference parameters
 - `VAR_OUTPUT` write-protection from outside the owning instance (nothing
   currently stops `Motor1.Running := TRUE;` from outside `Motor1`)
-- Standard `TON`/`TOF`/`CTU`/`CTD` timer/counter FBs (blocked on exposing
-  scan-cycle timing as a readable tag first — see Phase 2 below)
 
 ## Phase 2 and beyond
 
@@ -69,10 +70,12 @@ Explicitly out of scope for Phase 1's ST subset (parser will reject these):
   since there's no real consumer yet to justify the complexity. Likely fix:
   per-tag atomics or a seqlock/double-buffer scheme for scalar types, to
   bound the scan thread's worst-case wait time.
-- **Standard timer/counter FBs**: `TON`/`TOF`/`CTU`/`CTD`, ship as ordinary
-  ST-defined `FUNCTION_BLOCK`s using the Phase 1 clone-and-rebind mechanism
-  (same as the `R_TRIG`-style edge detector already tested), once
-  `ScanContext`'s cycle timing is exposed as a readable tag.
+- **Standard timer/counter FBs**: shipped — `TON`/`TOF`/`CTU`/`CTD` are
+  ordinary ST-defined `FUNCTION_BLOCK`s (`st/standard_fbs.hpp`) accumulating
+  against the new `"System.CycleTime"` global tag `ScanEngine` publishes
+  each scan (see `docs/architecture.md`). Still open: `TOF`'s `ET` doesn't
+  reset to zero after timeout (documented v1 semantics, not every
+  IEC-compliant implementation's exact edge case).
 - **Expanded ST language surface**: `FOR`, `CASE`, function calls in
   expression position, arrays/structs, remaining elementary types,
   `VAR_IN_OUT` parameters, `VAR_OUTPUT` write-protection, real `%DB`

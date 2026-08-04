@@ -67,6 +67,30 @@ TEST(ScanEngineTest, OverrunIsDetectedWhenProgramExceedsCycleTime) {
     EXPECT_EQ(engine.diagnostics().overrunCount, 1u);
 }
 
+TEST(ScanEngineTest, PublishesElapsedCycleTimeToSystemCycleTimeTagWhenDeclared) {
+    tags::TagStore tags;
+    // ScanEngine resolves this well-known tag by name once at construction (see
+    // st::bindCompilationUnit, which declares it for any ST program); a raw
+    // NativeProgram-based test can exercise the same mechanism by declaring it
+    // directly, with no ST parsing involved.
+    const auto cycleTimeTagId = tags.declare("System.CycleTime", tags::TypeId::Time, tags::TimeValue{0});
+    RecordingIoDriver io;
+    auto program = std::make_shared<core::NativeProgram>("noop", [](core::ScanContext&) {});
+
+    core::ScanEngine engine(tags, io, program, std::chrono::milliseconds(10));
+
+    // First scan has no previous sample to measure from: falls back to the
+    // configured cycle time exactly.
+    engine.runOnce();
+    EXPECT_EQ(std::get<tags::TimeValue>(tags.read(cycleTimeTagId)).count(), 10);
+
+    // Second scan measures real elapsed wall-clock time since the first scan
+    // started -- a loose lower bound keeps this robust against scheduler noise.
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    engine.runOnce();
+    EXPECT_GE(std::get<tags::TimeValue>(tags.read(cycleTimeTagId)).count(), 25);
+}
+
 TEST(ScanEngineTest, StartStopRunsBackgroundLoopForSeveralCycles) {
     tags::TagStore tags;
     RecordingIoDriver io;

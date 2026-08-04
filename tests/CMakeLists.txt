@@ -13,6 +13,7 @@ add_executable(softplc_tests
     st/parser_test.cpp
     st/pou_binder_test.cpp
     st/interpreter_test.cpp
+    st/standard_fbs_test.cpp
     support/mock_modbus_server.cpp
 )
 

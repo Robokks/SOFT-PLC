@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 #include "softplc/core/program.hpp"
@@ -89,6 +90,16 @@ private:
     std::condition_variable rtReadyCv_;
     bool rtReady_ = false;
     std::jthread thread_;
+
+    // Resolved once (if present) at construction time: the well-known "System.
+    // CycleTime" TIME tag that ST-defined timer FBs (TON/TOF/...) accumulate
+    // elapsed time against. Absent (nullopt) for a TagStore that never went
+    // through st::StProgram::load() -- no cost, no behavior change for those.
+    std::optional<tags::TagId> cycleTimeTagId_;
+    // Wall-clock start of the previous scan, used to compute the actual elapsed
+    // time published to cycleTimeTagId_ each scan (not the configured cycleTime_,
+    // which is only a target). Unset before the first scan.
+    std::optional<std::chrono::steady_clock::time_point> lastScanStart_;
 };
 
 }  // namespace softplc::core

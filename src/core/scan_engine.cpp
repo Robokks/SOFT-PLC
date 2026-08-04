@@ -6,7 +6,9 @@ namespace softplc::core {
 
 ScanEngine::ScanEngine(tags::TagStore& tags, io::IIoDriver& io, std::shared_ptr<IProgram> program,
                         std::chrono::microseconds cycleTime)
-    : tags_(tags), io_(io), program_(std::move(program)), cycleTime_(cycleTime) {}
+    : tags_(tags), io_(io), program_(std::move(program)), cycleTime_(cycleTime) {
+    cycleTimeTagId_ = tags_.find("System.CycleTime");
+}
 
 ScanEngine::~ScanEngine() { stop(); }
 
@@ -54,6 +56,17 @@ void ScanEngine::runOnce() {
     };
 
     io_.readInputs(tags_);
+    if (cycleTimeTagId_) {
+        // Actual elapsed time since the previous scan started -- not the configured
+        // (target) cycleTime_ -- so ST-defined timers (TON/TOF/...) stay accurate
+        // under jitter/overrun instead of silently assuming the ideal cadence. The
+        // very first scan has no previous sample, so it falls back to cycleTime_.
+        const auto dt = lastScanStart_
+                             ? std::chrono::duration_cast<tags::TimeValue>(cycleStart - *lastScanStart_)
+                             : std::chrono::duration_cast<tags::TimeValue>(cycleTime_);
+        tags_.write(*cycleTimeTagId_, dt);
+    }
+    lastScanStart_ = cycleStart;
     if (program_) {
         program_->execute(ctx);
     }

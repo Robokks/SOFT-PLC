@@ -310,6 +310,14 @@ StProgramAst bindProgram(StProgramAst program, BinderContext& ctx) {
 }  // namespace
 
 StProgramAst bindCompilationUnit(CompilationUnit unit, tags::TagStore& tags) {
+    // A well-known global TIME tag, written by ScanEngine every scan with the actual
+    // elapsed time since the previous scan started. Any POU body can reference it by
+    // name (resolveName()'s TagStore fallback, same mechanism DATA_BLOCK members use)
+    // without declaring it themselves -- this is what lets TON/TOF/CTU/CTD (see
+    // st/standard_fbs.hpp) be ordinary ST-defined FUNCTION_BLOCKs rather than
+    // needing native C++ intrinsics.
+    tags.declare("System.CycleTime", tags::TypeId::Time, tags::TimeValue{0});
+
     std::unordered_map<std::string, const PouAst*> registry;
     for (const auto& pou : unit.pous) {
         if (!registry.emplace(pou.name, &pou).second) {

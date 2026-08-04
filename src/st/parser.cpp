@@ -85,6 +85,20 @@ CompilationUnit Parser::parseCompilationUnit() {
     return unit;
 }
 
+std::vector<PouAst> Parser::parsePouLibrary() {
+    std::vector<PouAst> pous;
+    while (!check(TokenType::EndOfFile)) {
+        if (check(TokenType::KwFunctionBlock)) {
+            pous.push_back(parsePouDef(/*isFunction=*/false));
+        } else if (check(TokenType::KwFunction)) {
+            pous.push_back(parsePouDef(/*isFunction=*/true));
+        } else {
+            error("expected FUNCTION_BLOCK or FUNCTION");
+        }
+    }
+    return pous;
+}
+
 PouAst Parser::parsePouDef(bool isFunction) {
     PouAst pou;
     pou.isFunction = isFunction;

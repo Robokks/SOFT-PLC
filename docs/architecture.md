@@ -259,6 +259,66 @@ scan, so a rung cannot itself branch into multiple independently-powered
 sub-rungs the way a 2-D ladder grid with multiple output columns can
 (model that today as multiple separate `RUNG` statements instead).
 
+## Standard library: TON/TOF/CTU/CTD (`st/standard_fbs.hpp`)
+
+The four standard IEC 61131-3 timer/counter function blocks are implemented as
+ordinary ST-source `FUNCTION_BLOCK`s — the same clone-and-rebind mechanism as
+any user-defined FB — rather than as native C++ intrinsics wired into the
+interpreter. `include/softplc/st/standard_fbs.hpp` holds their source text
+(`kStandardFbLibrarySource`); `StProgram::load()` parses it with a new
+`Parser::parsePouLibrary()` (loops `FUNCTION_BLOCK`/`FUNCTION` definitions
+only — no `DATA_BLOCK`, no `PROGRAM` required, unlike `parseCompilationUnit()`)
+and appends the result to the user's own `CompilationUnit::pous` before
+binding. An unused standard FB costs nothing beyond the one-time parse of a
+small fixed text; only instantiating one pays the usual per-instance
+clone/bind cost, same as any other FB.
+
+**Why not native intrinsics.** Every other piece of stateful ST behavior in
+this codebase (the `R_TRIG`-style edge detector used as Phase A's own proof
+point) already goes through clone-and-rebind; giving timers/counters a
+special native path would mean two different execution models for
+"persistent FB instance state" with no real benefit — the ST language is
+already expressive enough to define them correctly.
+
+**Exposing scan time**: `TON`/`TOF` need to know how much wall-clock time
+elapsed each scan. `ScanEngine` now resolves a well-known global TIME tag,
+`"System.CycleTime"`, once at construction (`tags_.find(...)`, cached as an
+`optional<TagId>` — absent, and skipped every scan at zero cost, for any
+`TagStore` that never went through `st::bindCompilationUnit()`, e.g. a plain
+`NativeProgram`-based engine). Every `runOnce()` writes the *actual* elapsed
+time since the previous scan started into that tag, before executing the
+program — not the configured (target) cycle time, so timers stay accurate
+under jitter or overrun. The very first scan has no previous sample, so it
+publishes the configured cycle time as a reasonable default.
+`bindCompilationUnit()` unconditionally declares `"System.CycleTime"` for
+every compiled program, so any POU body can read it exactly like a
+`DATA_BLOCK` member (`resolveName()`'s existing TagStore-fallback path) with
+no special syntax. `TON`/`TOF` accumulate `ET` by adding this per-scan
+sample each execution while running, clamping at `PT` — a discrete,
+scan-quantized integration (accuracy bounded by the scan rate), not a
+free-running wall-clock read, deliberately: it keeps timer state advancing
+in lockstep with the same deterministic scan model every other tag in this
+runtime uses.
+
+**CTU/CTD parameter names.** The real IEC 61131-3 standard names these
+blocks' reset/load inputs `R`/`LD` (not `RESET`) — used here verbatim, which
+incidentally sidesteps any collision with the `RUNG` statement's `SET`/
+`RESET` coil keywords (see "Ladder Diagram" above); `TON`/`TOF`/`CTU`/`CTD`
+themselves use `IN`/`PT`/`Q`/`ET`/`CU`/`CD`/`PV`/`CV`, none of which are
+reserved words in this grammar.
+
+**Reserved names**: a user `CompilationUnit` that defines its own
+`FUNCTION_BLOCK`/`FUNCTION` named `TON`/`TOF`/`CTU`/`CTD` fails to load —
+merging the standard library after parsing the user's source hits the same
+duplicate-POU-name check `bindCompilationUnit()` already uses for any other
+name collision.
+
+**Known limitation, deliberately not fixed yet**: `TOF`'s `ET` does not
+reset to zero once `Q` goes false (it holds at `PT` until `IN` rises again),
+which matches this v1's chosen semantics but not every IEC-compliant
+implementation's exact edge-case behavior — documented here rather than
+silently diverging.
+
 ## Modbus TCP I/O driver (`io/modbus_*`, `net/`)
 
 `ModbusTcpIoDriver` is a Modbus TCP **client (master)**: it polls real (or,
@@ -396,7 +456,13 @@ the same three layers: parser tests for direct/SET/RESET coils and
 multi-coil rungs; a binder test for the non-BOOL-coil-target error; and
 interpreter tests for a seal-in latch via feedback contact, SET/RESET
 latching without feedback, and an FB instance's output read as a contact on
-an adjacent rung. `ScanEngine` is tested primarily through `runOnce()`
+an adjacent rung. `tests/st/standard_fbs_test.cpp` covers TON/TOF/CTU/CTD via
+a `tick()` helper that drives one scan deterministically (writes an explicit
+`System.CycleTime` sample, then calls `execute()` directly) rather than
+relying on real `sleep_for`-based timing, plus the reserved-name collision
+error; `tests/core/scan_engine_test.cpp` separately verifies `ScanEngine`
+itself publishes the configured cycle time on the first scan and a real
+measured elapsed duration on subsequent scans. `ScanEngine` is tested primarily through `runOnce()`
 for determinism; a few tests exercise the real threaded `start()`/`stop()`
 loop, including that falling behind schedule increments `resyncCount`.
 `tests/core/rt_scheduling_test.cpp` verifies `applyRealtimePolicy()`
