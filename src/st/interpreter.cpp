@@ -9,76 +9,18 @@ namespace softplc::st {
 using tags::TypeId;
 using tags::Value;
 
+using tags::asDouble;
+using tags::coerceToType;
+using tags::fromDouble;
+using tags::isNumeric;
+using tags::numericRank;
+
 namespace {
-
-int numericRank(TypeId t) {
-    switch (t) {
-        case TypeId::Byte:
-            return 0;
-        case TypeId::Int:
-            return 1;
-        case TypeId::DInt:
-            return 2;
-        case TypeId::Real:
-            return 3;
-        case TypeId::LReal:
-            return 4;
-        default:
-            return -1;
-    }
-}
-
-bool isNumeric(TypeId t) { return numericRank(t) >= 0; }
-
-double asDouble(const Value& v) {
-    return std::visit(
-        [](auto&& x) -> double {
-            using T = std::decay_t<decltype(x)>;
-            if constexpr (std::is_arithmetic_v<T> && !std::is_same_v<T, bool>) {
-                return static_cast<double>(x);
-            } else {
-                throw std::runtime_error("expected a numeric value in arithmetic expression");
-            }
-        },
-        v);
-}
-
-Value fromDouble(double d, TypeId type) {
-    switch (type) {
-        case TypeId::Byte:
-            return static_cast<std::uint8_t>(d);
-        case TypeId::Int:
-            return static_cast<std::int16_t>(d);
-        case TypeId::DInt:
-            return static_cast<std::int32_t>(d);
-        case TypeId::Real:
-            return static_cast<float>(d);
-        case TypeId::LReal:
-            return d;
-        default:
-            throw std::runtime_error("cannot produce a non-numeric result from arithmetic");
-    }
-}
 
 TypeId numericResultType(TypeId a, TypeId b) {
     static constexpr std::array<TypeId, 5> kOrder = {TypeId::Byte, TypeId::Int, TypeId::DInt,
                                                        TypeId::Real, TypeId::LReal};
     return kOrder[static_cast<std::size_t>(std::max(numericRank(a), numericRank(b)))];
-}
-
-// Bare numeric literals (and FC/FB call-arg values) are evaluated without knowledge of
-// the assignment target's declared type (LiteralExpr::value is always DInt for integer
-// literals -- see Parser::parsePrimary), so every write through the interpreter must
-// coerce to the target tag's declared type rather than assuming the evaluated Value's
-// variant alternative already matches it.
-Value coerceToType(const Value& v, TypeId target) {
-    const TypeId source = tags::typeOf(v);
-    if (source == target) return v;
-    if (isNumeric(source) && isNumeric(target)) {
-        return fromDouble(asDouble(v), target);
-    }
-    throw std::runtime_error(std::string("type mismatch: cannot assign ") + tags::toString(source) +
-                              " value to " + tags::toString(target) + " target");
 }
 
 Value evalArithmetic(BinaryOp op, const Value& l, const Value& r) {

@@ -49,6 +49,21 @@ constexpr auto kCounterProgram = R"(
     END_PROGRAM
 )";
 
+// A program that only ever reads its VAR_INPUT-like tags (never writes them itself),
+// so a written value is observable unchanged on the next /api/tags read -- proof that
+// the write endpoint, not scan logic, produced it.
+constexpr auto kForceableTagsProgram = R"(
+    PROGRAM Test
+    VAR
+        Speed : INT := 0;
+        Enabled : BOOL := FALSE;
+        Setpoint : REAL := 0.0;
+        Label : STRING := 'none';
+    END_VAR
+    Label := Label;
+    END_PROGRAM
+)";
+
 }  // namespace
 
 TEST_F(PlcServerFixture, StartsWithNoProgramLoaded) {
@@ -99,6 +114,75 @@ TEST_F(PlcServerFixture, TagsEndpointReflectsLiveScanUpdates) {
     EXPECT_NE(res->body.find("\"type\":\"DINT\""), std::string::npos);
     // Counter must have counted up from its initializer, not sat at 0.
     EXPECT_EQ(res->body.find("\"value\":0"), std::string::npos);
+}
+
+TEST_F(PlcServerFixture, WriteEndpointForcesBoolIntRealAndStringTags) {
+    ASSERT_TRUE(client_->Post("/api/program", kForceableTagsProgram, "text/plain"));
+
+    auto post = [this](const std::string& tag, const std::string& jsonBody) {
+        return client_->Post("/api/tags/" + tag, jsonBody, "application/json");
+    };
+
+    {
+        const auto res = post("Enabled", R"({"value": true})");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 200);
+    }
+    {
+        const auto res = post("Speed", R"({"value": 1500})");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 200);
+    }
+    {
+        const auto res = post("Setpoint", R"({"value": 3.5})");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 200);
+    }
+    {
+        const auto res = post("Label", R"({"value": "hello"})");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 200);
+    }
+
+    const auto tagsRes = client_->Get("/api/tags");
+    ASSERT_TRUE(tagsRes);
+    EXPECT_NE(tagsRes->body.find("\"name\":\"Enabled\",\"type\":\"BOOL\",\"value\":true"),
+              std::string::npos);
+    EXPECT_NE(tagsRes->body.find("\"name\":\"Speed\",\"type\":\"INT\",\"value\":1500"),
+              std::string::npos);
+    // REAL/LREAL serialize via std::to_string's fixed 6-decimal form (see
+    // docs/architecture.md's "JSON is hand-written" note), not a minimal
+    // representation -- 3.5 becomes "3.500000", not "3.5".
+    EXPECT_NE(
+        tagsRes->body.find("\"name\":\"Setpoint\",\"type\":\"REAL\",\"value\":3.500000"),
+        std::string::npos);
+    EXPECT_NE(tagsRes->body.find(R"("name":"Label","type":"STRING","value":"hello")"),
+              std::string::npos);
+}
+
+TEST_F(PlcServerFixture, WriteEndpointRejectsUnknownTagAndTypeMismatch) {
+    ASSERT_TRUE(client_->Post("/api/program", kForceableTagsProgram, "text/plain"));
+
+    {
+        const auto res = client_->Post("/api/tags/NoSuchTag", R"({"value": 1})",
+                                        "application/json");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 400);
+        EXPECT_NE(res->body.find("\"error\""), std::string::npos);
+    }
+    {
+        // A JSON string into a BOOL-declared tag is a genuine type mismatch.
+        const auto res = client_->Post("/api/tags/Enabled", R"({"value": "not a bool"})",
+                                        "application/json");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 400);
+    }
+    {
+        const auto res = client_->Post("/api/tags/Speed", "not json at all",
+                                        "application/json");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 400);
+    }
 }
 
 TEST_F(PlcServerFixture, TagStreamEmitsAtLeastOneEvent) {

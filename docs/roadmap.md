@@ -71,12 +71,12 @@ Explicitly out of scope for Phase 1's ST subset (parser will reject these):
   not exercised by this repository's Linux-only test suite.
 - **External tag access**: an HTTP programming/monitoring server
   (`server/plc_server.hpp`, `apps/plc_server` — see "Programming/monitoring
-  HTTP server" in `docs/architecture.md`) now exposes `TagStore` read-only (a
-  JSON snapshot and an SSE live-tag stream) and can compile/"download" a new
-  program into a running target — the first real concurrent external
-  consumer exercising the `shared_mutex` concurrent-reader path the store was
-  designed for, though not yet at a load that makes the locking-revisit below
-  urgent. Still open: tag *write*/"force" (currently read-only), and
+  HTTP server" in `docs/architecture.md`) now exposes `TagStore` (a JSON
+  snapshot, an SSE live-tag stream, and a `POST /api/tags/<name>` write/
+  "force" endpoint) and can compile/"download" a new program into a running
+  target — the first real concurrent external consumer exercising the
+  `shared_mutex` concurrent-reader path the store was designed for, though
+  not yet at a load that makes the locking-revisit below urgent. Still open:
   OPC-UA/Modbus-server access for HMI/SCADA clients specifically (a separate,
   not-yet-built consumer of the same `TagStore`). Once concurrent-reader load
   actually matters, revisit `TagStore`'s locking: a `shared_mutex` is a
@@ -104,10 +104,10 @@ Explicitly out of scope for Phase 1's ST subset (parser will reject these):
   List (IL/STL) language support (not just ST), with v1 targeting the full loop
   (editor + download + live monitor). Landed so far: the backend half —
   `server/plc_server.hpp`/`apps/plc_server` (see "Programming/monitoring HTTP server"
-  in `docs/architecture.md`) — compile/download and a read-only live tag monitor
-  (JSON snapshot + SSE stream) over HTTP. Still open, in roughly dependency order:
-  a tag *write*/"force" endpoint (monitor is currently read-only); the actual web
-  frontend (framework/build-tooling choice not yet made); a real graphical Ladder
+  in `docs/architecture.md`) — compile/download, a live tag monitor (JSON snapshot +
+  SSE stream), and a tag write/"force" endpoint, all over HTTP. Still open, in
+  roughly dependency order: the actual web frontend (framework/build-tooling choice
+  not yet made); a real graphical Ladder
   editor that serializes to/from `RungStmt`/`CallStmt` (either via the existing
   textual `RUNG` grammar or a JSON IR compiled server-side directly into those AST
   nodes — see "FB/FC boxes on a rung" in `docs/architecture.md`); a genuine IL/STL

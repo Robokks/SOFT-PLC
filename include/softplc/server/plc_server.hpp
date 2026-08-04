@@ -58,6 +58,19 @@ public:
     // currently-running engine is left running, untouched.
     DownloadResult download(const std::string& stSource);
 
+    struct WriteResult {
+        bool ok = false;
+        std::string error;  // populated iff !ok
+    };
+
+    // Writes `rawValue` into the live tag `name`, coercing it to the tag's declared
+    // type the same way ST's own AssignStmt narrowing does (tags::coerceToType) -- so
+    // e.g. a plain `double` (what a JSON number decodes to, see server/plc_server.cpp)
+    // narrows correctly into an INT/DINT/REAL/BOOL/STRING-declared tag. Fails for an
+    // unknown tag name, no program loaded, or a genuine type mismatch (e.g. a string
+    // into a DINT tag).
+    WriteResult writeTag(const std::string& name, const tags::Value& rawValue);
+
     // Starts the HTTP listener. Blocks until the server stops (call from a dedicated
     // thread if the caller needs to keep running). Returns false if the port couldn't
     // be bound.

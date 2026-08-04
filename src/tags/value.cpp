@@ -71,6 +71,65 @@ Value defaultValueFor(TypeId type) {
     return false;
 }
 
+int numericRank(TypeId type) {
+    switch (type) {
+        case TypeId::Byte:
+            return 0;
+        case TypeId::Int:
+            return 1;
+        case TypeId::DInt:
+            return 2;
+        case TypeId::Real:
+            return 3;
+        case TypeId::LReal:
+            return 4;
+        default:
+            return -1;
+    }
+}
+
+bool isNumeric(TypeId type) { return numericRank(type) >= 0; }
+
+double asDouble(const Value& value) {
+    return std::visit(
+        [](auto&& x) -> double {
+            using T = std::decay_t<decltype(x)>;
+            if constexpr (std::is_arithmetic_v<T> && !std::is_same_v<T, bool>) {
+                return static_cast<double>(x);
+            } else {
+                throw std::runtime_error("expected a numeric value");
+            }
+        },
+        value);
+}
+
+Value fromDouble(double d, TypeId type) {
+    switch (type) {
+        case TypeId::Byte:
+            return static_cast<std::uint8_t>(d);
+        case TypeId::Int:
+            return static_cast<std::int16_t>(d);
+        case TypeId::DInt:
+            return static_cast<std::int32_t>(d);
+        case TypeId::Real:
+            return static_cast<float>(d);
+        case TypeId::LReal:
+            return d;
+        default:
+            throw std::runtime_error("cannot produce a non-numeric value from a double");
+    }
+}
+
+Value coerceToType(const Value& value, TypeId target) {
+    const TypeId source = typeOf(value);
+    if (source == target) return value;
+    if (isNumeric(source) && isNumeric(target)) {
+        return fromDouble(asDouble(value), target);
+    }
+    throw std::runtime_error(std::string("type mismatch: cannot assign ") + toString(source) +
+                              " value to " + toString(target) + " target");
+}
+
 std::string jsonEscapeString(std::string_view s) {
     std::string out;
     out.reserve(s.size() + 2);

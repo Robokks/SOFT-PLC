@@ -516,8 +516,28 @@ model as this project's existing Modbus TCP/RTU drivers): `GET /api/status` (run
 state, program name, tag count, `ScanDiagnostics`), `GET /api/tags` (a full JSON tag
 snapshot via the new `TagStore::snapshot()`), `POST /api/program` (body = raw ST
 source; 200 + program name/tag count on success, 400 + `{"error":...}` on failure,
-leaving any prior program running), and `GET /api/tags/stream` -- a Server-Sent-Events
-tag snapshot every 200ms until the client disconnects.
+leaving any prior program running), `POST /api/tags/<name>` (body =
+`{"value": <bool|number|string>}`; a tag write/"force" -- see below), and
+`GET /api/tags/stream` -- a Server-Sent-Events tag snapshot every 200ms until the
+client disconnects.
+
+**Tag write/"force" reuses `coerceToType()`, doesn't reimplement it.** `AssignStmt`'s
+narrowing rule (a bare integer literal is always `DINT`; every write coerces to the
+target tag's *declared* type -- see "Type coercion on write" above) is exactly what a
+JSON-typed write needs too: a JSON number decoded as a plain `double` must narrow into
+whatever numeric type the target tag declares, the same way a `DINT` literal narrows
+into an `INT` tag. Rather than re-deriving that logic HTTP-side, `coerceToType()` (and
+its numeric helpers `isNumeric`/`asDouble`/`fromDouble`) moved from being
+`st::interpreter.cpp`-local to public functions in `tags/value.{hpp,cpp}` -- they were
+already pure `Value`/`TypeId` operations with nothing ST-specific about them, so this
+is a relocation, not a rewrite; `Interpreter` calls the same functions unqualified via
+`using` declarations. `PlcServer::writeTag()` decodes the request body with a
+deliberately narrow hand-written parser (`parseValueField()` in `plc_server.cpp`,
+extracting just the one `"value"` field's literal -- see "JSON is hand-written" below)
+into a `bool`/`double`/`std::string` `Value`, then calls `coerceToType()` exactly like
+`AssignStmt` does; `TIME` is the one case special-cased outside `coerceToType()`
+(a JSON number decoding into a `TimeValue` millisecond count), since no other caller
+ever needed a bare-double-to-`TIME` conversion.
 
 **Why SSE, not WebSocket, for the live monitor.** The monitor only needs one direction
 (server -> browser); a future "force tag" write is an ordinary `POST`, not something
@@ -538,13 +558,15 @@ file so this stays a plain-HTTP build with no implicit extra runtime dependency 
 up just because a build machine happens to have one of those installed.
 
 **JSON is hand-written, not a vendored library.** `Value`'s type set is eight simple
-variants (`tags::toJson()` in `value.cpp`) and every request body this v1 needs to
-parse is either raw ST source text (`POST /api/program`) or nothing at all -- there is
-no incoming JSON to parse yet, only JSON to emit, so a couple of small serialization
-functions (plus `jsonEscapeString()`, shared between `Value` string values and tag
-names) covers it without pulling in a general JSON library. Revisit this once an
-endpoint needs to parse structured JSON input (e.g. a future graphical-ladder-editor
-payload).
+variants (`tags::toJson()` in `value.cpp`), and the only *incoming* JSON this v1 needs
+to parse is one fixed shape, `{"value": <literal>}` for the tag-write endpoint
+(`parseValueField()` in `plc_server.cpp` -- a few lines that find the `"value"` key and
+decode whichever JSON literal follows it, not a general recursive-descent JSON
+parser). Between that and the hand-written emit side (plus `jsonEscapeString()`,
+shared between `Value` string values and tag names), a general JSON library still
+isn't earning its keep. Revisit this once an endpoint needs to parse genuinely
+structured/nested JSON input (e.g. a future graphical-ladder-editor payload, which
+is expected to need real nesting a one-field extractor can't handle).
 
 **Testing** (`tests/server/plc_server_test.cpp`) follows this project's established
 real-server-not-a-mock approach (mirroring the Modbus mock-server tests): a real
@@ -556,13 +578,12 @@ prior program running untouched, `/api/tags` reflecting live scan-driven updates
 at least one real SSE frame received over `/api/tags/stream`.
 
 **Known limitations, deliberately not fixed yet**: no authentication/TLS (v1 assumes a
-trusted local network, like Modbus); no tag *write*/"force" endpoint yet (read-only
-monitor for now -- the natural next `POST /api/tags/{name}`-shaped addition); no
-static-file serving for a frontend bundle yet (deferred until a GUI frontend actually
-exists to serve); download always takes the raw-ST-source path -- a future graphical
-ladder editor is expected to either emit the same textual grammar or a JSON IR
-compiled server-side directly into `CallStmt`/`RungStmt` AST nodes (see "Ladder
-Diagram" above), neither of which exists yet.
+trusted local network, like Modbus); no static-file serving for a frontend bundle yet
+(deferred until a GUI frontend actually exists to serve); download always takes the
+raw-ST-source path -- a future graphical ladder editor is expected to either emit the
+same textual grammar or a JSON IR compiled server-side directly into
+`CallStmt`/`RungStmt` AST nodes (see "Ladder Diagram" above), neither of which exists
+yet; the tag-write endpoint takes one value at a time (no batch/multi-tag write).
 
 ## Real-time characteristics
 
