@@ -4,6 +4,8 @@
 #include <httplib.h>
 
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <thread>
 
 #include "softplc/io/simulated_io_driver.hpp"
@@ -183,6 +185,43 @@ TEST_F(PlcServerFixture, WriteEndpointRejectsUnknownTagAndTypeMismatch) {
         ASSERT_TRUE(res);
         EXPECT_EQ(res->status, 400);
     }
+}
+
+// Standalone (not PlcServerFixture, which always constructs a PlcServer with no
+// static directory): proves a configured static directory is served at "/" without
+// shadowing the /api/* routes registered alongside it.
+TEST(PlcServerStaticDirTest, ServesStaticFilesAtRootWithoutShadowingApiRoutes) {
+    const auto dir = std::filesystem::temp_directory_path() /
+                      "softplc_plc_server_test_static";
+    std::filesystem::create_directories(dir);
+    {
+        std::ofstream index(dir / "index.html");
+        index << "<html><body>softplc web frontend</body></html>";
+    }
+
+    io::SimulatedIoDriver io;
+    server::PlcServer server(io, std::chrono::milliseconds(5), dir.string());
+    const int port = server.bindEphemeralPort("127.0.0.1");
+    ASSERT_GT(port, 0);
+    std::thread listener([&] { server.listenAfterBind(); });
+
+    httplib::Client client("127.0.0.1", port);
+    client.set_connection_timeout(2);
+    client.set_read_timeout(2);
+
+    const auto indexRes = client.Get("/");
+    ASSERT_TRUE(indexRes);
+    EXPECT_EQ(indexRes->status, 200);
+    EXPECT_NE(indexRes->body.find("softplc web frontend"), std::string::npos);
+
+    const auto statusRes = client.Get("/api/status");
+    ASSERT_TRUE(statusRes);
+    EXPECT_EQ(statusRes->status, 200);
+    EXPECT_NE(statusRes->body.find("\"running\":false"), std::string::npos);
+
+    server.stop();
+    listener.join();
+    std::filesystem::remove_all(dir);
 }
 
 TEST_F(PlcServerFixture, TagStreamEmitsAtLeastOneEvent) {

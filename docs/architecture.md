@@ -22,6 +22,7 @@ include/softplc/
 src/                        (matching .cpp files)
 apps/plc_runner/            main.cpp — loads an .st file and runs the engine
 apps/plc_server/            main.cpp — hosts PlcServer's HTTP API, program optional
+web/                        React + TypeScript frontend talking to PlcServer's API
 examples/blink/             a minimal ST program toggling a direct-addressed output
 tests/                      GoogleTest unit tests, mirroring src/, plus
                              tests/support/mock_modbus_server.{hpp,cpp}
@@ -584,6 +585,57 @@ raw-ST-source path -- a future graphical ladder editor is expected to either emi
 same textual grammar or a JSON IR compiled server-side directly into
 `CallStmt`/`RungStmt` AST nodes (see "Ladder Diagram" above), neither of which exists
 yet; the tag-write endpoint takes one value at a time (no batch/multi-tag write).
+
+## Web frontend (`web/`)
+
+A minimal React + TypeScript (Vite) single-page app talking to `PlcServer`'s HTTP API:
+a status bar, a live tag table (subscribed to `/api/tags/stream`, falling back to
+polling `/api/tags` whenever the SSE connection isn't live -- e.g. the initial
+connection, or the momentary gap while a download restarts the engine), a per-tag
+force control (`POST /api/tags/<name>`), and a raw-ST-source textarea + Download
+button (`POST /api/program`) that surfaces a compile error inline rather than
+navigating away or throwing an unhandled exception.
+
+**Why Vite + React + TypeScript.** Vite gives a fast dev server with an out-of-the-box
+dev proxy (`vite.config.ts` forwards `/api` to the backend, so the app can always call
+same-origin paths whether it's running under `vite dev` or served by `PlcServer`
+itself in production) and a single `npm run build` producing static output with no
+separate bundler configuration to maintain. React + TypeScript is this project's one
+concession to an ecosystem dependency on the frontend side (unlike the C++ core's
+zero-runtime-dependency posture) because a graphical Ladder editor (still open, see
+`docs/roadmap.md`) needs real interactive UI state management that plain DOM
+manipulation would make far harder to keep correct as it grows.
+
+**PlcServer serves the built frontend directly.** `PlcServer`'s constructor takes an
+optional `staticDir`; when set, it's mounted at `/` (cpp-httplib's
+`set_mount_point()`) instead of the plain-text banner `PlcServer` otherwise serves
+there, so `apps/plc_server --static-dir=web/dist ...` makes a single running process
+serve both the compiled `web/dist` bundle and the JSON API a browser pointed at it
+talks to -- the actual "full loop" (editor + download + live monitor) the GUI phase
+targets, verified by hand end-to-end: download a program, watch tags update live over
+the SSE stream (including a `BOOL` tag genuinely flipping), force a tag, and confirm
+an invalid download is rejected with the real parser error while the prior program
+keeps scanning untouched.
+
+**Testing**: Vitest + React Testing Library, following the same principle as the C++
+side's real-server-not-a-mock tests where practical -- `api.ts`'s functions are
+exercised against a stubbed `fetch` (there's no browser-side way to spin up a "real"
+HTTP server the way `httplib::Client` does against a real `PlcServer`, so stubbing
+`fetch` is this side's equivalent boundary), and `ProgramEditor`/`TagTable` are
+rendered and interacted with via Testing Library rather than snapshot-tested.
+`tests/server/plc_server_test.cpp` gained a companion C++ test
+(`PlcServerStaticDirTest`) proving a configured static directory is served at `/`
+without shadowing the `/api/*` routes registered alongside it.
+
+**Known limitations, deliberately not fixed yet**: no build step wires `web/`'s
+`npm run build` into the CMake build (the two are independent for now -- build the
+frontend with `npm`, point `--static-dir` at its `dist/`, same as this project's other
+optional-integration boundaries); a tag's force input doesn't resync with a live value
+arriving from the stream while the user is actively editing it (a deliberate
+simplification, not a bug -- syncing only while unfocused is the natural fix, not yet
+done); no graphical Ladder editor or IL/STL source mode yet (`ProgramEditor` is a
+plain textarea, ST-source-only) -- both are real, not-yet-made design decisions
+tracked in `docs/roadmap.md`.
 
 ## Real-time characteristics
 

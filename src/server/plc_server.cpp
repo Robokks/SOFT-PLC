@@ -157,9 +157,9 @@ ParsedJsonValue parseValueField(const std::string& body) {
 
 }  // namespace
 
-PlcServer::PlcServer(io::IIoDriver& io, std::chrono::microseconds cycleTime)
-    : io_(io), cycleTime_(cycleTime), tags_(std::make_unique<tags::TagStore>()),
-      http_(std::make_unique<httplib::Server>()) {
+PlcServer::PlcServer(io::IIoDriver& io, std::chrono::microseconds cycleTime, std::string staticDir)
+    : io_(io), cycleTime_(cycleTime), staticDir_(std::move(staticDir)),
+      tags_(std::make_unique<tags::TagStore>()), http_(std::make_unique<httplib::Server>()) {
     registerRoutes();
 }
 
@@ -235,10 +235,17 @@ std::string PlcServer::programName() const {
 }
 
 void PlcServer::registerRoutes() {
-    http_->Get("/", [](const httplib::Request&, httplib::Response& res) {
-        res.set_content("SOFT-PLC programming/monitoring server. See /api/status.\n",
-                         "text/plain");
-    });
+    if (!staticDir_.empty()) {
+        // Serves web/dist's index.html/JS/CSS at "/". httplib tries registered
+        // handlers (the /api/* routes below) before falling back to a mount point, so
+        // this never shadows them regardless of registration order.
+        http_->set_mount_point("/", staticDir_);
+    } else {
+        http_->Get("/", [](const httplib::Request&, httplib::Response& res) {
+            res.set_content("SOFT-PLC programming/monitoring server. See /api/status.\n",
+                             "text/plain");
+        });
+    }
 
     http_->Get("/api/status", [this](const httplib::Request&, httplib::Response& res) {
         std::ostringstream out;

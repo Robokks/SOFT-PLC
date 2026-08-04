@@ -1,0 +1,134 @@
+:root {
+  --text: #1a1a1a;
+  --bg: #fff;
+  --border: #d7d7db;
+  --accent: #2b6cb0;
+  --danger: #b00020;
+  --row-bg: #f7f7f8;
+  font: 15px/1.5 system-ui, 'Segoe UI', Roboto, sans-serif;
+  color-scheme: light dark;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #e4e4e7;
+    --bg: #17181c;
+    --border: #33343b;
+    --accent: #6ea8dc;
+    --danger: #ff6b6b;
+    --row-bg: #1f2025;
+  }
+}
+
+body {
+  margin: 0;
+}
+
+.app {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 16px 24px 48px;
+}
+
+h1 {
+  font-size: 22px;
+  margin: 8px 0 16px;
+}
+
+h2 {
+  font-size: 16px;
+  margin: 0 0 8px;
+}
+
+section {
+  margin-top: 24px;
+}
+
+.status-bar {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.status-bar__state {
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.status-bar--running .status-bar__state {
+  color: #2f9e44;
+}
+
+.status-bar--stopped .status-bar__state {
+  color: var(--danger);
+}
+
+.tag-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.tag-table th,
+.tag-table td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tag-table tbody tr:nth-child(odd) {
+  background: var(--row-bg);
+}
+
+.tag-table__empty {
+  color: var(--text);
+  opacity: 0.7;
+}
+
+.force-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.force-control input {
+  width: 8em;
+}
+
+.force-control__error {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.program-editor textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
+}
+
+.program-editor__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.program-editor__result {
+  color: #2f9e44;
+}
+
+.program-editor__error {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  color: var(--danger);
+  white-space: pre-wrap;
+  font-size: 13px;
+}

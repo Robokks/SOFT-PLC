@@ -105,17 +105,21 @@ Explicitly out of scope for Phase 1's ST subset (parser will reject these):
   (editor + download + live monitor). Landed so far: the backend half —
   `server/plc_server.hpp`/`apps/plc_server` (see "Programming/monitoring HTTP server"
   in `docs/architecture.md`) — compile/download, a live tag monitor (JSON snapshot +
-  SSE stream), and a tag write/"force" endpoint, all over HTTP. Still open, in
-  roughly dependency order: the actual web frontend (framework/build-tooling choice
-  not yet made); a real graphical Ladder
-  editor that serializes to/from `RungStmt`/`CallStmt` (either via the existing
-  textual `RUNG` grammar or a JSON IR compiled server-side directly into those AST
-  nodes — see "FB/FC boxes on a rung" in `docs/architecture.md`); a genuine IL/STL
-  front end compiling its accumulator+jump model down into the existing `Expr`/`Stmt`
-  tree (`ast.hpp` has no label/goto construct today, so this needs either a
-  restricted structured-jump subset or a new jump-capable execution primitive —
-  a real design decision, not yet made); and static-file hosting of the built
-  frontend from `PlcServer`. A real ST/IL text or Ladder-graphical *editor UI*
-  (syntax highlighting, drag-and-drop rungs, etc.) is inherently a large,
-  multi-session undertaking — expect this to land incrementally, each slice with
-  its own tests, rather than as one change.
+  SSE stream), and a tag write/"force" endpoint, all over HTTP. A minimal web
+  frontend has also landed (`web/` — Vite + React + TypeScript, see "Web frontend" in
+  `docs/architecture.md`): status bar, live tag table with per-tag force, and a raw
+  ST-source textarea + Download button, with `PlcServer` able to serve the built
+  bundle directly (`--static-dir`) — the full editor+download+live-monitor loop works
+  end-to-end today, verified by hand, for plain ST source. Still open, in roughly
+  dependency order: a real graphical Ladder editor that serializes to/from
+  `RungStmt`/`CallStmt` (either via the existing textual `RUNG` grammar or a JSON IR
+  compiled server-side directly into those AST nodes — see "FB/FC boxes on a rung" in
+  `docs/architecture.md`) in place of today's plain textarea; a genuine IL/STL front
+  end compiling its accumulator+jump model down into the existing `Expr`/`Stmt` tree
+  (`ast.hpp` has no label/goto construct today, so this needs either a restricted
+  structured-jump subset or a new jump-capable execution primitive — a real design
+  decision, not yet made); and wiring `web/`'s `npm run build` into the CMake build
+  (the two build systems are independent for now). A real graphical Ladder *editor UI*
+  (drag-and-drop rungs, etc.) is inherently a large, multi-session undertaking —
+  expect it to land incrementally, each slice with its own tests, rather than as one
+  change.

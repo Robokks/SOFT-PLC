@@ -45,7 +45,15 @@ struct DownloadResult {
 // io/io_driver.hpp).
 class PlcServer {
 public:
-    PlcServer(io::IIoDriver& io, std::chrono::microseconds cycleTime);
+    // `staticDir`, if non-empty, is mounted at "/" (cpp-httplib's set_mount_point) to
+    // serve a built web frontend -- e.g. web/dist's `index.html`/JS/CSS -- so a browser
+    // pointed at this server gets the actual GUI, not just the JSON API. Left empty,
+    // "/" instead serves a one-line plain-text banner (useful for apps/plc_server
+    // usage without a frontend built yet, or the test suite, which has no dist/ to
+    // point at). Decided at construction time, not changeable afterwards -- there's no
+    // use case yet for switching a running server's static directory.
+    PlcServer(io::IIoDriver& io, std::chrono::microseconds cycleTime,
+              std::string staticDir = {});
     ~PlcServer();
 
     PlcServer(const PlcServer&) = delete;
@@ -96,6 +104,7 @@ private:
 
     io::IIoDriver& io_;
     std::chrono::microseconds cycleTime_;
+    std::string staticDir_;
 
     mutable std::shared_mutex stateMutex_;  // guards every field below
     std::unique_ptr<tags::TagStore> tags_;

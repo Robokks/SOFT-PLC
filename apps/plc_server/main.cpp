@@ -41,6 +41,7 @@ int main(int argc, char** argv) {
     std::string host = "0.0.0.0";
     int port = 8080;
     int cycleMs = 10;
+    std::string staticDir;
     std::string initialProgramPath;
 
     for (int i = 1; i < argc; ++i) {
@@ -51,13 +52,15 @@ int main(int argc, char** argv) {
             port = std::stoi(arg.substr(7));
         } else if (arg.rfind("--cycle-time-ms=", 0) == 0) {
             cycleMs = std::stoi(arg.substr(16));
+        } else if (arg.rfind("--static-dir=", 0) == 0) {
+            staticDir = arg.substr(13);
         } else if (initialProgramPath.empty()) {
             initialProgramPath = arg;
         }
     }
 
     softplc::io::SimulatedIoDriver io;
-    softplc::server::PlcServer server(io, std::chrono::milliseconds(cycleMs));
+    softplc::server::PlcServer server(io, std::chrono::milliseconds(cycleMs), staticDir);
 
     if (!initialProgramPath.empty()) {
         const auto result = server.download(readFile(initialProgramPath));
@@ -72,6 +75,9 @@ int main(int argc, char** argv) {
 
     std::signal(SIGINT, handleSigint);
 
+    if (!staticDir.empty()) {
+        std::cout << "serving web frontend from '" << staticDir << "'\n";
+    }
     std::cout << "listening on http://" << host << ":" << port << " (Ctrl+C to stop)...\n";
     bool bindFailed = false;
     std::thread listener([&] {
