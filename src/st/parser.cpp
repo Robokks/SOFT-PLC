@@ -314,8 +314,9 @@ StmtList Parser::parseStatementList(std::initializer_list<TokenType> terminators
 StmtPtr Parser::parseStatement() {
     if (check(TokenType::KwIf)) return parseIfStatement();
     if (check(TokenType::KwWhile)) return parseWhileStatement();
+    if (check(TokenType::KwRung)) return parseRungStatement();
     if (check(TokenType::Identifier)) return parseAssignOrCallStatement();
-    error("expected a statement (assignment, IF, WHILE or a call)");
+    error("expected a statement (assignment, IF, WHILE, RUNG or a call)");
 }
 
 StmtPtr Parser::parseIfStatement() {
@@ -352,6 +353,34 @@ StmtPtr Parser::parseWhileStatement() {
     StmtList body = parseStatementList({TokenType::KwEndWhile});
     expect(TokenType::KwEndWhile, "END_WHILE");
     return std::make_unique<WhileStmt>(std::move(cond), std::move(body));
+}
+
+StmtPtr Parser::parseRungStatement() {
+    expect(TokenType::KwRung, "RUNG");
+    ExprPtr condition = parseExpression();
+    expect(TokenType::RArrow, "'=>'");
+
+    std::vector<RungOutput> outputs;
+    outputs.push_back(parseRungOutput());
+    while (match(TokenType::Comma)) {
+        outputs.push_back(parseRungOutput());
+    }
+
+    expect(TokenType::Semicolon, "';'");
+    return std::make_unique<RungStmt>(std::move(condition), std::move(outputs));
+}
+
+RungOutput Parser::parseRungOutput() {
+    RungOutput out;
+    if (match(TokenType::KwSet)) {
+        out.kind = RungOutputKind::Set;
+    } else if (match(TokenType::KwReset)) {
+        out.kind = RungOutputKind::Reset;
+    } else {
+        out.kind = RungOutputKind::Direct;
+    }
+    out.targetName = parseDottedIdentifier();
+    return out;
 }
 
 StmtPtr Parser::parseAssignOrCallStatement() {

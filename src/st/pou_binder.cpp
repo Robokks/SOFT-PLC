@@ -253,6 +253,18 @@ void bindStmt(Stmt& stmt, const std::unordered_map<std::string, tags::TagId>& lo
         case StmtKind::Call:
             bindCallStmt(static_cast<CallStmt&>(stmt), localScope, instanceCallables, ctx);
             return;
+        case StmtKind::Rung: {
+            auto& rung = static_cast<RungStmt&>(stmt);
+            bindExpr(*rung.condition, localScope, ctx);
+            for (auto& out : rung.outputs) {
+                out.targetId = resolveName(out.targetName, localScope, ctx.tags);
+                if (ctx.tags.typeOf(out.targetId) != tags::TypeId::Bool) {
+                    throw std::runtime_error("RUNG output '" + out.targetName +
+                                              "' must be a BOOL tag (coils are boolean outputs)");
+                }
+            }
+            return;
+        }
     }
 }
 

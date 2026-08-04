@@ -327,6 +327,10 @@ void Interpreter::execStmt(const Stmt& stmt, tags::TagStore& tags) const {
             execCall(static_cast<const CallStmt&>(stmt), tags);
             return;
         }
+        case StmtKind::Rung: {
+            execRung(static_cast<const RungStmt&>(stmt), tags);
+            return;
+        }
     }
     throw std::logic_error("Interpreter::execStmt: unreachable statement kind");
 }
@@ -363,6 +367,28 @@ void Interpreter::execCall(const CallStmt& call, tags::TagStore& tags) const {
         if (arg.isOutput) {
             tags.write(arg.outputTargetId,
                        coerceToType(tags.read(arg.paramTagId), tags.typeOf(arg.outputTargetId)));
+        }
+    }
+}
+
+void Interpreter::execRung(const RungStmt& rung, tags::TagStore& tags) const {
+    const Value cond = evaluate(*rung.condition, tags);
+    if (tags::typeOf(cond) != TypeId::Bool) {
+        throw std::runtime_error("RUNG condition must evaluate to BOOL");
+    }
+    const bool powered = std::get<bool>(cond);
+
+    for (const auto& out : rung.outputs) {
+        switch (out.kind) {
+            case RungOutputKind::Direct:
+                tags.write(out.targetId, powered);
+                break;
+            case RungOutputKind::Set:
+                if (powered) tags.write(out.targetId, true);
+                break;
+            case RungOutputKind::Reset:
+                if (powered) tags.write(out.targetId, false);
+                break;
         }
     }
 }

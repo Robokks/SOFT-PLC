@@ -77,7 +77,7 @@ public:
 
 // ---- Statements ----
 
-enum class StmtKind { Assign, If, While, Call };
+enum class StmtKind { Assign, If, While, Call, Rung };
 
 class Stmt {
 public:
@@ -195,6 +195,39 @@ public:
     // Resolved once, at bind time: index into the owning StProgramAst::frames for
     // the bound (cloned) body this call executes.
     std::size_t frameIndex = kInvalidFrame;
+};
+
+// A ladder-style rung: `RUNG <bool-expr> => [SET|RESET] target (',' [SET|RESET] target)* ;`.
+// The condition expression reuses the ordinary boolean expression grammar --
+// AND/OR/NOT already give exactly "series contacts / parallel branches / normally-
+// closed contact" semantics, so no separate contact/branch AST was needed. An FB/FC
+// box placed "on" a rung is just an ordinary CallStmt in the same body, adjacent to
+// the RUNG that reads its output or drives its input (see docs/architecture.md).
+enum class RungOutputKind { Direct, Set, Reset };
+
+struct RungOutput {
+    RungOutputKind kind = RungOutputKind::Direct;
+    std::string targetName;
+    // Resolved once, at bind time. The target must be a BOOL tag (a coil).
+    tags::TagId targetId = tags::kInvalidTagId;
+
+    [[nodiscard]] RungOutput clone() const {
+        return RungOutput{.kind = kind, .targetName = targetName};
+    }
+};
+
+class RungStmt : public Stmt {
+public:
+    RungStmt(ExprPtr condition, std::vector<RungOutput> outputs)
+        : Stmt(StmtKind::Rung), condition(std::move(condition)), outputs(std::move(outputs)) {}
+    [[nodiscard]] StmtPtr clone() const override {
+        std::vector<RungOutput> copiedOutputs;
+        copiedOutputs.reserve(outputs.size());
+        for (const auto& out : outputs) copiedOutputs.push_back(out.clone());
+        return std::make_unique<RungStmt>(condition->clone(), std::move(copiedOutputs));
+    }
+    ExprPtr condition;
+    std::vector<RungOutput> outputs;
 };
 
 // ---- Declarations & Program ----

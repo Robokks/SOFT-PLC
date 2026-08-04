@@ -324,6 +324,144 @@ TEST(InterpreterTest, IntegerLiteralAssignedToNonDIntTargetCoercesToDeclaredType
     EXPECT_EQ(std::get<std::int16_t>(tags.read(id)), 200);
 }
 
+TEST(InterpreterTest, LadderSealInCircuitLatchesViaFeedbackContact) {
+    // Classic motor seal-in rung: "(Start OR Motor) AND NOT Stop => Motor;" -- Motor's
+    // own coil is read back as a contact on the same rung, a standard ladder idiom
+    // (series = AND, parallel = OR, feedback = reading the coil's own tag).
+    const std::string source = R"(
+        PROGRAM Test
+        VAR
+            Start : BOOL := FALSE;
+            Stop : BOOL := FALSE;
+            Motor : BOOL := FALSE;
+        END_VAR
+        RUNG (Start OR Motor) AND NOT Stop => Motor;
+        END_PROGRAM
+    )";
+
+    tags::TagStore tags;
+    auto program = st::StProgram::load(source, tags);
+    auto startId = tags.find("Start").value();
+    auto stopId = tags.find("Stop").value();
+    auto motorId = tags.find("Motor").value();
+
+    io::SimulatedIoDriver io;
+    core::ScanEngine engine(tags, io, program, std::chrono::milliseconds(10));
+
+    // Start pulses true for one scan: Motor latches on.
+    tags.write(startId, true);
+    engine.runOnce();
+    EXPECT_TRUE(std::get<bool>(tags.read(motorId)));
+
+    // Start drops back to false: Motor stays on via its own feedback contact.
+    tags.write(startId, false);
+    engine.runOnce();
+    EXPECT_TRUE(std::get<bool>(tags.read(motorId)));
+
+    // Stop breaks the seal-in: Motor drops out.
+    tags.write(stopId, true);
+    engine.runOnce();
+    EXPECT_FALSE(std::get<bool>(tags.read(motorId)));
+
+    // Stop releases: Motor stays off (nothing is driving Start OR Motor anymore).
+    tags.write(stopId, false);
+    engine.runOnce();
+    EXPECT_FALSE(std::get<bool>(tags.read(motorId)));
+}
+
+TEST(InterpreterTest, LadderSetResetCoilsLatchWithoutFeedbackContact) {
+    const std::string source = R"(
+        PROGRAM Test
+        VAR
+            Start : BOOL := FALSE;
+            Stop : BOOL := FALSE;
+            Motor : BOOL := FALSE;
+        END_VAR
+        RUNG Start => SET Motor;
+        RUNG Stop => RESET Motor;
+        END_PROGRAM
+    )";
+
+    tags::TagStore tags;
+    auto program = st::StProgram::load(source, tags);
+    auto startId = tags.find("Start").value();
+    auto stopId = tags.find("Stop").value();
+    auto motorId = tags.find("Motor").value();
+
+    io::SimulatedIoDriver io;
+    core::ScanEngine engine(tags, io, program, std::chrono::milliseconds(10));
+
+    tags.write(startId, true);
+    engine.runOnce();
+    EXPECT_TRUE(std::get<bool>(tags.read(motorId)));
+
+    // Neither Start nor Stop is powered: the SET coil must NOT re-drive Motor to
+    // FALSE just because its rung isn't powered this scan (unlike a Direct coil).
+    tags.write(startId, false);
+    engine.runOnce();
+    EXPECT_TRUE(std::get<bool>(tags.read(motorId)));
+
+    tags.write(stopId, true);
+    engine.runOnce();
+    EXPECT_FALSE(std::get<bool>(tags.read(motorId)));
+
+    tags.write(stopId, false);
+    engine.runOnce();
+    EXPECT_FALSE(std::get<bool>(tags.read(motorId)));
+}
+
+TEST(InterpreterTest, RungReadsFbInstanceOutputPlacedAdjacentAsABox) {
+    // A future GUI would place Edge1 "on" the rung as a box; v1's textual grammar
+    // achieves the same effect by placing the CallStmt immediately before the RUNG
+    // that reads its Q output like any other contact.
+    const std::string source = R"(
+        FUNCTION_BLOCK FB_REdge
+        VAR_INPUT
+            CLK : BOOL;
+        END_VAR
+        VAR_OUTPUT
+            Q : BOOL;
+        END_VAR
+        VAR
+            M : BOOL;
+        END_VAR
+        Q := CLK AND NOT M;
+        M := CLK;
+        END_FUNCTION_BLOCK
+
+        PROGRAM Test
+        VAR
+            Trigger : BOOL := FALSE;
+            Edge1 : FB_REdge;
+            Pulse : BOOL := FALSE;
+        END_VAR
+        Edge1(CLK := Trigger);
+        RUNG Edge1.Q => Pulse;
+        END_PROGRAM
+    )";
+
+    tags::TagStore tags;
+    auto program = st::StProgram::load(source, tags);
+    auto triggerId = tags.find("Trigger").value();
+    auto pulseId = tags.find("Pulse").value();
+
+    io::SimulatedIoDriver io;
+    core::ScanEngine engine(tags, io, program, std::chrono::milliseconds(10));
+
+    engine.runOnce();
+    EXPECT_FALSE(std::get<bool>(tags.read(pulseId)));
+
+    // Trigger rises: FB_REdge pulses Q true this scan, and the RUNG's contact on
+    // Edge1.Q drives Pulse true in the same scan.
+    tags.write(triggerId, true);
+    engine.runOnce();
+    EXPECT_TRUE(std::get<bool>(tags.read(pulseId)));
+
+    // Trigger stays high (no new edge): Q drops back, so does Pulse.
+    engine.runOnce();
+    EXPECT_FALSE(std::get<bool>(tags.read(pulseId)));
+}
+
 TEST(InterpreterTest, AssigningIncompatibleTypeThrowsAtRuntime) {
     const std::string source = R"(
         PROGRAM Test

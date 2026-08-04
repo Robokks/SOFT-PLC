@@ -195,6 +195,70 @@ arrays/structs; multi-file compilation units (today: one `.st` source with
 all POU/DB/PROGRAM definitions); `VAR_OUTPUT` write-protection from outside
 an instance; `VAR_IN_OUT` pass-by-reference parameters.
 
+## Ladder Diagram (`RUNG` statements in the ST pipeline)
+
+There is no graphical programming surface yet (see `docs/roadmap.md`), so v1
+of Ladder Diagram support is a textual statement, `RUNG`, added directly to
+the same lexer/parser/binder/interpreter Structured Text already uses —
+deliberately *not* a separate front-end/compiler module, since a rung's
+semantics turn out to already be expressible with the grammar that existed:
+
+```
+RungStmt   ::= 'RUNG' Expression '=>' RungOutput (',' RungOutput)* ';'
+RungOutput ::= ('SET' | 'RESET')? DottedIdentifier
+```
+
+**Contacts and branches are just the existing boolean expression grammar.**
+A normally-open contact is a `BOOL` tag reference; a normally-closed contact
+is `NOT tag` (already implemented); series contacts are `AND`; a parallel
+branch is `OR` — precisely ladder's continuity semantics, so `RungStmt`
+reuses `parseExpression()`/`Expr`/`evaluate()` as-is rather than inventing
+dedicated `Contact`/`SeriesGroup`/`ParallelGroup` AST nodes. A classic
+seal-in circuit is therefore just:
+```
+RUNG (Start OR Motor) AND NOT Stop => Motor;
+```
+— `Motor` read back on the right-hand side of its own rung is the standard
+ladder "feedback contact" idiom, and needs no special-casing: it's an
+ordinary `IdentifierExpr` resolving to the same `TagId` the coil writes.
+
+**Coils** (`RungOutput`) come in three kinds, matching standard ladder coil
+types: `Direct` (no modifier) writes the rung's boolean result to the target
+every scan, exactly like a continuously-assigned output; `SET` forces the
+target `TRUE` only while the rung is powered and otherwise leaves it
+untouched (a latch); `RESET` symmetrically forces `FALSE` while powered.
+Multiple coils can share one rung (`RUNG cond => SET A, RESET B;`), each
+with an independently-chosen kind. A coil target must resolve to a `BOOL`
+tag — `pou_binder` throws `std::runtime_error` at load time otherwise
+(coils can address a plain output tag, a DB member, or an FB instance
+member, same as any other dotted name).
+
+**FB/FC boxes "on" a rung.** True graphical ladder places a function block
+box inline on a rung, with its own `EN`/`ENO` power-flow pins. Without a GUI
+to place boxes on a 2-D grid, v1 achieves the same effect textually: an FB
+call is an ordinary `CallStmt` (see "Data Blocks, Function Blocks, and
+Functions" above) placed immediately before the `RUNG` that reads its
+output or drives its input, e.g.:
+```
+Edge1(CLK := StartButton);
+RUNG Edge1.Q AND NOT StopButton => Motor;
+```
+`Edge1.Q` is read exactly like any other contact once the call has run. This
+is a deliberate, documented simplification rather than an oversight — a
+future GUI can still emit this exact statement sequence (or construct the
+same `CallStmt`/`RungStmt` AST nodes directly, bypassing the text grammar
+entirely), so nothing here needs to change once box-on-rung placement with
+real `EN`/`ENO` power-flow semantics is designed.
+
+**Known limitation, deliberately not fixed yet**: no `EN`/`ENO` power-flow
+propagation through an FB box (a called FB always executes regardless of
+rung state — v1's `CallStmt` has no "enable" input); no visual/graphical
+representation at all (this is a textual stand-in, not a renderer); a
+`RUNG`'s condition is evaluated and every coil driven exactly once per
+scan, so a rung cannot itself branch into multiple independently-powered
+sub-rungs the way a 2-D ladder grid with multiple output columns can
+(model that today as multiple separate `RUNG` statements instead).
+
 ## Modbus TCP I/O driver (`io/modbus_*`, `net/`)
 
 `ModbusTcpIoDriver` is a Modbus TCP **client (master)**: it polls real (or,
@@ -327,7 +391,12 @@ instance-of-instance produces four independently-addressable groups; two FC
 call sites don't leak `VAR_TEMP` into each other; and each of the binder's
 load-time error cases (unresolved instance type, unknown call-arg name,
 wrong-direction `:=`/`=>` binding, omitted required FC input, circular FB
-instantiation) is exercised directly. `ScanEngine` is tested primarily through `runOnce()`
+instantiation) is exercised directly. `RUNG` statements are covered across
+the same three layers: parser tests for direct/SET/RESET coils and
+multi-coil rungs; a binder test for the non-BOOL-coil-target error; and
+interpreter tests for a seal-in latch via feedback contact, SET/RESET
+latching without feedback, and an FB instance's output read as a contact on
+an adjacent rung. `ScanEngine` is tested primarily through `runOnce()`
 for determinism; a few tests exercise the real threaded `start()`/`stop()`
 loop, including that falling behind schedule increments `resyncCount`.
 `tests/core/rt_scheduling_test.cpp` verifies `applyRealtimePolicy()`

@@ -31,10 +31,17 @@ Explicitly out of scope for Phase 1's ST subset (parser will reject these):
 
 ## Phase 2 and beyond
 
-- **Ladder Logic (LD) and Function Block Diagram (FBD)**: implement as
-  additional `IProgram`s (or additional front-ends compiling down to the
-  existing ST AST/interpreter), reusing the scan engine, tag database, and
-  I/O abstraction unchanged.
+- **Ladder Logic (LD)**: a first textual cut has landed — the `RUNG`
+  statement (see "Ladder Diagram" in `docs/architecture.md`), reusing the
+  existing boolean expression grammar for series/parallel contacts and
+  adding Direct/SET/RESET coils, with FB/FC boxes placed as an adjacent
+  `CallStmt`. Still needed: a real graphical editor/renderer (blocked on the
+  GUI phase — see below), `EN`/`ENO` power-flow propagation into FB calls,
+  and multi-output-column rungs (today: one `RUNG` per independently-powered
+  output group).
+- **Function Block Diagram (FBD)**: not started; implement as an additional
+  front-end compiling down to the existing `Expr`/`Stmt` AST, reusing the
+  scan engine, tag database, and I/O abstraction unchanged, same as LD.
 - **Instruction List (IL)**: same approach; note IL is deprecated in newer
   IEC 61131-3 editions, so prioritize it below LD/FBD.
 - **Task / multi-POU scheduling**: an IEC "Task" concept binding one or more

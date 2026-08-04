@@ -53,6 +53,9 @@ enum class TokenType {
     KwVarTemp,
     KwDataBlock,
     KwEndDataBlock,
+    KwRung,
+    KwSet,
+    KwReset,
 
     // Punctuation & operators
     Colon,

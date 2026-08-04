@@ -27,8 +27,9 @@ public:
 //   END_PROGRAM
 // (exactly one PROGRAM per compilation unit; the POU/DB definitions above may
 // appear in any order/count before or after it)
-// Statements: assignment, IF/ELSIF/ELSE/END_IF, WHILE/DO/END_WHILE, and calls
-// (`InstanceOrFcName(Param := expr, Param => target);`).
+// Statements: assignment, IF/ELSIF/ELSE/END_IF, WHILE/DO/END_WHILE, calls
+// (`InstanceOrFcName(Param := expr, Param => target);`), and ladder-style rungs
+// (`RUNG <bool-expr> => [SET|RESET] target (, [SET|RESET] target)*;`).
 // Expressions: arithmetic, comparison, boolean (AND/OR/XOR/NOT), parentheses, unary
 // minus. Identifiers may be dotted (`DB1.Speed`, `Motor1.Running`).
 class Parser {
@@ -69,6 +70,8 @@ private:
     StmtPtr parseStatement();
     StmtPtr parseIfStatement();
     StmtPtr parseWhileStatement();
+    StmtPtr parseRungStatement();
+    RungOutput parseRungOutput();
     // Parses a dotted identifier, then dispatches to an assignment (':=') or a call
     // ('(') based on what follows.
     StmtPtr parseAssignOrCallStatement();

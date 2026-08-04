@@ -21,6 +21,11 @@ private:
     // Runs an FB instance's or FC call site's bound Frame: applies VAR_TEMP resets,
     // copies ':=' inputs in, executes the frame's body, copies '=>' outputs out.
     void execCall(const CallStmt& call, tags::TagStore& tags) const;
+    // Evaluates a rung's condition once and drives each output coil: Direct writes
+    // the condition value every scan; Set/Reset only ever force TRUE/FALSE when the
+    // condition holds, otherwise leaving the coil's current value untouched (a
+    // latch), matching standard ladder Set/Reset coil semantics.
+    void execRung(const RungStmt& rung, tags::TagStore& tags) const;
 
     const StProgramAst& program_;
 };

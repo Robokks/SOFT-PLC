@@ -36,6 +36,9 @@ const std::unordered_map<std::string, TokenType>& keywordTable() {
         {"VAR_TEMP", TokenType::KwVarTemp},
         {"DATA_BLOCK", TokenType::KwDataBlock},
         {"END_DATA_BLOCK", TokenType::KwEndDataBlock},
+        {"RUNG", TokenType::KwRung},
+        {"SET", TokenType::KwSet},
+        {"RESET", TokenType::KwReset},
     };
     return table;
 }

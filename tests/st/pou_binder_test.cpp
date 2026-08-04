@@ -366,6 +366,20 @@ TEST(PouBinderTest, ProgramCanWriteDataBlockMember) {
     EXPECT_EQ(std::get<std::int16_t>(tags.read(speedId)), 200);
 }
 
+TEST(PouBinderTest, ThrowsWhenRungOutputTargetIsNotBool) {
+    const std::string source = R"(
+        PROGRAM Test
+        VAR
+            Start : BOOL := FALSE;
+            Count : DINT := 0;
+        END_VAR
+        RUNG Start => Count;
+        END_PROGRAM
+    )";
+    tags::TagStore tags;
+    EXPECT_THROW(bindSource(source, tags), std::runtime_error);
+}
+
 TEST(PouBinderTest, FbOutputReadableByDottedNameWithoutArrowBinding) {
     const std::string source = R"(
         FUNCTION_BLOCK FB_X

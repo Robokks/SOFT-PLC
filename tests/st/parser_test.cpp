@@ -357,3 +357,70 @@ TEST(ParserTest, ThrowsOnMissingProgram) {
     )"),
                  ParseError);
 }
+
+TEST(ParserTest, ParsesRungStatementWithDirectCoil) {
+    auto ast = parse(R"(
+        PROGRAM Test
+        VAR
+            Start : BOOL := FALSE;
+            Stop : BOOL := FALSE;
+            Motor : BOOL := FALSE;
+        END_VAR
+        RUNG Start AND NOT Stop => Motor;
+        END_PROGRAM
+    )");
+
+    ASSERT_EQ(ast.body.size(), 1u);
+    EXPECT_EQ(ast.body[0]->kind, StmtKind::Rung);
+    const auto& rung = static_cast<const RungStmt&>(*ast.body[0]);
+    ASSERT_EQ(rung.outputs.size(), 1u);
+    EXPECT_EQ(rung.outputs[0].kind, RungOutputKind::Direct);
+    EXPECT_EQ(rung.outputs[0].targetName, "Motor");
+    // "Start AND NOT Stop" -- series contact (AND) with a normally-closed contact
+    // (NOT) -- proves the rung condition reuses the ordinary boolean expression
+    // grammar rather than needing dedicated contact/series-branch AST nodes.
+    EXPECT_EQ(rung.condition->kind, ExprKind::Binary);
+}
+
+TEST(ParserTest, ParsesRungWithSetResetCoilsAndMultipleOutputs) {
+    auto ast = parse(R"(
+        PROGRAM Test
+        VAR
+            Start : BOOL := FALSE;
+            Stop : BOOL := FALSE;
+            Motor : BOOL := FALSE;
+            Lamp : BOOL := FALSE;
+        END_VAR
+        RUNG Start => SET Motor, Lamp;
+        RUNG Stop => RESET Motor;
+        END_PROGRAM
+    )");
+
+    ASSERT_EQ(ast.body.size(), 2u);
+    const auto& rung1 = static_cast<const RungStmt&>(*ast.body[0]);
+    ASSERT_EQ(rung1.outputs.size(), 2u);
+    EXPECT_EQ(rung1.outputs[0].kind, RungOutputKind::Set);
+    EXPECT_EQ(rung1.outputs[0].targetName, "Motor");
+    // Each output's SET/RESET modifier is independent -- "Lamp" here has none, so
+    // it defaults to an ordinary direct (continuous-assignment) coil.
+    EXPECT_EQ(rung1.outputs[1].kind, RungOutputKind::Direct);
+    EXPECT_EQ(rung1.outputs[1].targetName, "Lamp");
+
+    const auto& rung2 = static_cast<const RungStmt&>(*ast.body[1]);
+    ASSERT_EQ(rung2.outputs.size(), 1u);
+    EXPECT_EQ(rung2.outputs[0].kind, RungOutputKind::Reset);
+    EXPECT_EQ(rung2.outputs[0].targetName, "Motor");
+}
+
+TEST(ParserTest, ThrowsOnMissingArrowInRungStatement) {
+    EXPECT_THROW(parse(R"(
+        PROGRAM Test
+        VAR
+            Start : BOOL := FALSE;
+            Motor : BOOL := FALSE;
+        END_VAR
+        RUNG Start Motor;
+        END_PROGRAM
+    )"),
+                 ParseError);
+}
