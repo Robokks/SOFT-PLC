@@ -70,6 +70,11 @@ std::size_t TagStore::size() const {
     return tags_.size();
 }
 
+std::vector<Tag> TagStore::snapshot() const {
+    std::shared_lock lock(mutex_);
+    return tags_;
+}
+
 const Tag& TagStore::at(TagId id) const {
     if (id >= tags_.size()) {
         throw std::out_of_range("TagStore: invalid TagId");

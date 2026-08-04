@@ -18,8 +18,10 @@ include/softplc/
           modbus_mapping.hpp, modbus_client.hpp, modbus_tcp_driver.hpp
   net/    tcp_socket.hpp, tcp_listener.hpp
   st/     token.hpp, lexer.hpp, ast.hpp, parser.hpp, interpreter.hpp, st_program.hpp
+  server/ plc_server.hpp — HTTP programming/monitoring API (see below)
 src/                        (matching .cpp files)
 apps/plc_runner/            main.cpp — loads an .st file and runs the engine
+apps/plc_server/            main.cpp — hosts PlcServer's HTTP API, program optional
 examples/blink/             a minimal ST program toggling a direct-addressed output
 tests/                      GoogleTest unit tests, mirroring src/, plus
                              tests/support/mock_modbus_server.{hpp,cpp}
@@ -474,6 +476,94 @@ constraint — configure one device per bus if independent polling cadence
 matters more than sharing a physical port); gap-tolerant batching (same
 documented, not-yet-implemented optimization as TCP).
 
+## Programming/monitoring HTTP server (`server/`, `apps/plc_server`)
+
+`PlcServer` is the first piece of "external tag access" from `docs/roadmap.md` and the
+backend half of the planned browser-based GUI: an HTTP API in front of a live PLC
+runtime that can compile/"download" a new ST source into a running target and expose
+the live `TagStore` for an online tag monitor. `apps/plc_server` is a thin executable
+mirroring `plc_runner`'s shape, except an initial program is optional -- the server can
+sit idle with nothing loaded until a programming client connects, like a real PLC
+target waiting for a download.
+
+**Whole-object-graph swap on download, not an in-place patch.** A new program can
+declare an entirely different tag set from the one currently running, so `TagId`s from
+the old `TagStore` have no meaning against a patched one. `PlcServer::download()`
+therefore compiles the incoming source against a **fresh** `TagStore` first (so a bad
+compile never disturbs the running target -- `st::StProgram::load()`'s exception leaves
+the old `{TagStore, StProgram, ScanEngine}` untouched), then, only on success, destroys
+the old `ScanEngine` (joining its scan thread) before constructing and starting a new
+one over the new `TagStore`/`StProgram`. The old engine is always fully stopped before
+the new one starts, rather than briefly overlapped, because both engines would
+otherwise call into the same long-lived `IIoDriver` concurrently -- no `IIoDriver`
+implementation here is designed or tested for two `ScanEngine`s driving it at once.
+This means a download causes a brief stop (bounded by one scan's `stop()`/`start()`),
+matching how a real PLC's download briefly goes to STOP; a true hot-patch that
+preserves `TagId`s/state across a download is future work once there's a concrete need
+for it. The `IIoDriver` itself is long-lived across downloads: `readInputs()`/
+`writeOutputs()` take the `TagStore` as a parameter rather than caching it (see
+"I/O abstraction" above), so handing them a fresh `TagStore` each download is
+transparent -- Modbus device configuration, for instance, survives a download
+unchanged.
+
+**Locking**: `PlcServer` guards its `{TagStore, StProgram, ScanEngine}` unit with its
+own `shared_mutex` (`stateMutex_`), separate from `TagStore`'s own internal one --
+HTTP handlers (running on cpp-httplib's worker threads) take the shared lock to read
+tags/diagnostics/status, `download()` takes the exclusive lock to swap the whole unit.
+
+**Endpoints** (v1, all plain HTTP, no auth/TLS -- same trusted-local-network threat
+model as this project's existing Modbus TCP/RTU drivers): `GET /api/status` (running
+state, program name, tag count, `ScanDiagnostics`), `GET /api/tags` (a full JSON tag
+snapshot via the new `TagStore::snapshot()`), `POST /api/program` (body = raw ST
+source; 200 + program name/tag count on success, 400 + `{"error":...}` on failure,
+leaving any prior program running), and `GET /api/tags/stream` -- a Server-Sent-Events
+tag snapshot every 200ms until the client disconnects.
+
+**Why SSE, not WebSocket, for the live monitor.** The monitor only needs one direction
+(server -> browser); a future "force tag" write is an ordinary `POST`, not something
+that needs a persistent duplex channel. SSE is plain chunked HTTP text
+(`text/event-stream`), so it needed no protocol library beyond the HTTP layer already
+in place -- adding a WebSocket dependency (or hand-rolling RFC 6455 framing) for
+one-directional data had no payoff here. Known limitation, deliberately not fixed yet:
+the stream polls a full snapshot on a fixed 200ms wall-clock interval rather than being
+scan-synchronized or diff-based (fine for a human-facing monitor UI, not a
+control-loop feed), and holds one httplib worker thread per connected client for the
+connection's lifetime (fine for a handful of GUI viewers, not designed for many
+concurrent watchers).
+
+**Why cpp-httplib.** MIT-licensed, single-header, `FetchContent`-fetchable like
+nanoMODBUS/googletest (`cmake/FetchCppHttplib.cmake`, pinned to `v0.15.3`), and its
+optional OpenSSL/zlib/brotli backends are explicitly forced off in that same CMake
+file so this stays a plain-HTTP build with no implicit extra runtime dependency picked
+up just because a build machine happens to have one of those installed.
+
+**JSON is hand-written, not a vendored library.** `Value`'s type set is eight simple
+variants (`tags::toJson()` in `value.cpp`) and every request body this v1 needs to
+parse is either raw ST source text (`POST /api/program`) or nothing at all -- there is
+no incoming JSON to parse yet, only JSON to emit, so a couple of small serialization
+functions (plus `jsonEscapeString()`, shared between `Value` string values and tag
+names) covers it without pulling in a general JSON library. Revisit this once an
+endpoint needs to parse structured JSON input (e.g. a future graphical-ladder-editor
+payload).
+
+**Testing** (`tests/server/plc_server_test.cpp`) follows this project's established
+real-server-not-a-mock approach (mirroring the Modbus mock-server tests): a real
+`PlcServer` bound to an OS-assigned ephemeral port (`bindEphemeralPort()`/
+`listenAfterBind()`, added alongside the normal fixed-port `listen()` specifically for
+this), driven through a real `httplib::Client` -- covering a fresh server with nothing
+loaded, a successful download starting the engine, an invalid download leaving the
+prior program running untouched, `/api/tags` reflecting live scan-driven updates, and
+at least one real SSE frame received over `/api/tags/stream`.
+
+**Known limitations, deliberately not fixed yet**: no authentication/TLS (v1 assumes a
+trusted local network, like Modbus); no tag *write*/"force" endpoint yet (read-only
+monitor for now -- the natural next `POST /api/tags/{name}`-shaped addition); no
+static-file serving for a frontend bundle yet (deferred until a GUI frontend actually
+exists to serve); download always takes the raw-ST-source path -- a future graphical
+ladder editor is expected to either emit the same textual grammar or a JSON IR
+compiled server-side directly into `CallStmt`/`RungStmt` AST nodes (see "Ladder
+Diagram" above), neither of which exists yet.
+
 ## Real-time characteristics
 
 Out of the box, on a stock (non-PREEMPT_RT) Linux or Windows kernel, the scan
@@ -569,6 +659,9 @@ disconnect, connection rejection) at the transport layer. One honest gap:
 true connect-*timeout*-under-packet-loss isn't reliably reproducible in a
 hermetic sandbox, so those tests cover connection-refused and the timeout
 plumbing itself rather than literally induced packet loss.
+
+`tests/server/plc_server_test.cpp` covers the HTTP programming/monitoring API (see
+"Programming/monitoring HTTP server" above) the same real-server-not-a-mock way.
 
 Modbus RTU tests (`tests/net/serial_port_test.cpp`, `tests/io/modbus_rtu_*`)
 follow the same real-protocol-not-a-mock philosophy over a real PTY pair

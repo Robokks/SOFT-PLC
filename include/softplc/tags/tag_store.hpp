@@ -43,6 +43,11 @@ public:
 
     [[nodiscard]] std::size_t size() const;
 
+    // Point-in-time copy of every declared tag, taken under one shared lock. For
+    // consumers that need the whole tag list at once (e.g. a GUI's live tag view)
+    // rather than per-tag read()/nameOf()/typeOf() round trips.
+    [[nodiscard]] std::vector<Tag> snapshot() const;
+
     // Invokes fn(const Tag&) for every declared tag whose address falls in `area`,
     // while holding a single shared lock for the whole scan (used by I/O drivers).
     template <typename F>

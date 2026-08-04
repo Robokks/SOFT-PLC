@@ -69,15 +69,23 @@ Explicitly out of scope for Phase 1's ST subset (parser will reject these):
   not wired into `apps/plc_runner`). RTU-specific: the Windows
   `net::SerialPort` path (`CreateFileA`/`DCB`/`COMMTIMEOUTS`) is written but
   not exercised by this repository's Linux-only test suite.
-- **External tag access**: OPC-UA and/or Modbus server exposing `TagStore`
-  to HMI/SCADA clients, exercising the `shared_mutex` concurrent-reader path
-  the store was designed for. Once such a consumer exists, revisit
-  `TagStore`'s locking: a `shared_mutex` is a priority-inversion / unbounded-
-  wait risk once something can hold the shared (read) lock while the scan
-  thread's `write()` needs the exclusive lock — deliberately not fixed now
-  since there's no real consumer yet to justify the complexity. Likely fix:
-  per-tag atomics or a seqlock/double-buffer scheme for scalar types, to
-  bound the scan thread's worst-case wait time.
+- **External tag access**: an HTTP programming/monitoring server
+  (`server/plc_server.hpp`, `apps/plc_server` — see "Programming/monitoring
+  HTTP server" in `docs/architecture.md`) now exposes `TagStore` read-only (a
+  JSON snapshot and an SSE live-tag stream) and can compile/"download" a new
+  program into a running target — the first real concurrent external
+  consumer exercising the `shared_mutex` concurrent-reader path the store was
+  designed for, though not yet at a load that makes the locking-revisit below
+  urgent. Still open: tag *write*/"force" (currently read-only), and
+  OPC-UA/Modbus-server access for HMI/SCADA clients specifically (a separate,
+  not-yet-built consumer of the same `TagStore`). Once concurrent-reader load
+  actually matters, revisit `TagStore`'s locking: a `shared_mutex` is a
+  priority-inversion / unbounded-wait risk once something can hold the shared
+  (read) lock while the scan thread's `write()` needs the exclusive lock —
+  deliberately not fixed now since real measured contention doesn't exist yet
+  to justify the complexity. Likely fix: per-tag atomics or a
+  seqlock/double-buffer scheme for scalar types, to bound the scan thread's
+  worst-case wait time.
 - **Standard timer/counter FBs**: shipped — `TON`/`TOF`/`CTU`/`CTD` are
   ordinary ST-defined `FUNCTION_BLOCK`s (`st/standard_fbs.hpp`) accumulating
   against the new `"System.CycleTime"` global tag `ScanEngine` publishes
@@ -89,5 +97,25 @@ Explicitly out of scope for Phase 1's ST subset (parser will reject these):
   `VAR_IN_OUT` parameters, `VAR_OUTPUT` write-protection, real `%DB`
   numbered/byte-offset addressing, multi-file compilation units.
 - **Persistence**: retentive (`VAR RETAIN`) variables surviving a restart.
-- **HMI/Web UI**: a way to observe/force tag values without recompiling a
-  program (out of scope until the above runtime pieces are solid).
+- **HMI/Web UI — graphical programming interface**: a browser-based, TIA-Portal-style
+  front end (program editor, "download" to a running target, live online monitor).
+  Decided direction: a web app talking to the backend HTTP API, a true graphical
+  (2-D grid) Ladder Diagram editor rather than a textual stand-in, real Instruction
+  List (IL/STL) language support (not just ST), with v1 targeting the full loop
+  (editor + download + live monitor). Landed so far: the backend half —
+  `server/plc_server.hpp`/`apps/plc_server` (see "Programming/monitoring HTTP server"
+  in `docs/architecture.md`) — compile/download and a read-only live tag monitor
+  (JSON snapshot + SSE stream) over HTTP. Still open, in roughly dependency order:
+  a tag *write*/"force" endpoint (monitor is currently read-only); the actual web
+  frontend (framework/build-tooling choice not yet made); a real graphical Ladder
+  editor that serializes to/from `RungStmt`/`CallStmt` (either via the existing
+  textual `RUNG` grammar or a JSON IR compiled server-side directly into those AST
+  nodes — see "FB/FC boxes on a rung" in `docs/architecture.md`); a genuine IL/STL
+  front end compiling its accumulator+jump model down into the existing `Expr`/`Stmt`
+  tree (`ast.hpp` has no label/goto construct today, so this needs either a
+  restricted structured-jump subset or a new jump-capable execution primitive —
+  a real design decision, not yet made); and static-file hosting of the built
+  frontend from `PlcServer`. A real ST/IL text or Ladder-graphical *editor UI*
+  (syntax highlighting, drag-and-drop rungs, etc.) is inherently a large,
+  multi-session undertaking — expect this to land incrementally, each slice with
+  its own tests, rather than as one change.

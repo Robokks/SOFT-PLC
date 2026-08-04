@@ -1,5 +1,9 @@
 #include "softplc/tags/value.hpp"
 
+#include <iomanip>
+#include <sstream>
+#include <type_traits>
+
 namespace softplc::tags {
 
 const char* toString(TypeId type) {
@@ -65,6 +69,59 @@ Value defaultValueFor(TypeId type) {
             return std::string{};
     }
     return false;
+}
+
+std::string jsonEscapeString(std::string_view s) {
+    std::string out;
+    out.reserve(s.size() + 2);
+    out.push_back('"');
+    for (const char c : s) {
+        switch (c) {
+            case '"':
+                out += "\\\"";
+                break;
+            case '\\':
+                out += "\\\\";
+                break;
+            case '\n':
+                out += "\\n";
+                break;
+            case '\r':
+                out += "\\r";
+                break;
+            case '\t':
+                out += "\\t";
+                break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    std::ostringstream hex;
+                    hex << "\\u" << std::hex << std::setfill('0') << std::setw(4)
+                        << static_cast<int>(c);
+                    out += hex.str();
+                } else {
+                    out.push_back(c);
+                }
+        }
+    }
+    out.push_back('"');
+    return out;
+}
+
+std::string toJson(const Value& value) {
+    return std::visit(
+        [](auto&& v) -> std::string {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, bool>) {
+                return v ? "true" : "false";
+            } else if constexpr (std::is_same_v<T, TimeValue>) {
+                return std::to_string(v.count());
+            } else if constexpr (std::is_same_v<T, std::string>) {
+                return jsonEscapeString(v);
+            } else {
+                return std::to_string(v);
+            }
+        },
+        value);
 }
 
 }  // namespace softplc::tags

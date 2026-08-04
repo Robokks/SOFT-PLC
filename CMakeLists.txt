@@ -29,9 +29,11 @@ if(SOFTPLC_ENABLE_SANITIZERS)
 endif()
 
 include(cmake/FetchNanomodbus.cmake)
+include(cmake/FetchCppHttplib.cmake)
 
 add_subdirectory(src)
 add_subdirectory(apps/plc_runner)
+add_subdirectory(apps/plc_server)
 
 if(SOFTPLC_BUILD_TESTS)
     enable_testing()

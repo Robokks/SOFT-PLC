@@ -17,6 +17,7 @@ add_library(softplc_core STATIC
     st/pou_binder.cpp
     st/interpreter.cpp
     st/st_program.cpp
+    server/plc_server.cpp
 )
 
 target_include_directories(softplc_core PUBLIC
@@ -29,6 +30,7 @@ find_package(Threads REQUIRED)
 target_link_libraries(softplc_core PUBLIC Threads::Threads)
 
 target_link_libraries(softplc_core PUBLIC nanomodbus)
+target_link_libraries(softplc_core PUBLIC httplib::httplib)
 
 if(WIN32)
     target_link_libraries(softplc_core PUBLIC ws2_32)
