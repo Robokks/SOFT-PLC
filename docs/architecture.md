@@ -97,6 +97,104 @@ Minimal Phase 1 subset:
 the first scan, so `Interpreter::run()` never performs name lookups. See
 `docs/roadmap.md` for what's explicitly out of scope for Phase 1.
 
+## Data Blocks, Function Blocks, and Functions (`st/pou_binder`)
+
+A single `.st` source can now define `DATA_BLOCK`s and `FUNCTION_BLOCK`/
+`FUNCTION` POUs (Program Organization Units) alongside exactly one
+`PROGRAM`, in any order. `Parser::parseCompilationUnit()` collects them into
+a `CompilationUnit{pous, dataBlocks, program}`; `bindCompilationUnit()`
+(`st/pou_binder.{hpp,cpp}`) turns that into the same flat, fully-`TagId`-
+resolved `StProgramAst` the interpreter always ran, so `Interpreter` itself
+gained only one new statement kind (`CallStmt`) and no new concept of scope.
+
+**Why clone-and-rebind instead of dynamic scope resolution.** The scan-cycle
+hot path's core invariant — every `TagId` resolved once at load time, never
+by name during a scan (see "Tag database" above) — had to survive FB
+instantiation. Rather than give the interpreter a runtime notion of "current
+instance" and resolve names against it on every access, each FB instance
+declaration and each FC call site gets its own deep-cloned copy of the
+callee POU's body (`Expr`/`Stmt::clone()`), bound against that instance's
+own freshly-declared tags, exactly like the top-level `PROGRAM` always was.
+The cost is one clone-and-bind pass per instance/call-site, paid once at
+load time and proportional to program size — not to scan count — which is
+an easy trade for a system that scans at kHz and loads once. The bound
+result is stored as a `Frame` (cloned body + `VAR_TEMP` reset list) in
+`StProgramAst::frames`; a `CallStmt` only ever holds a plain `frameIndex`
+into that vector, mirroring how `IdentifierExpr` only ever holds a `TagId`.
+
+**Clone granularity** differs deliberately by POU kind: an FB instance is
+cloned **once per instance declaration** (`Motor1 : FB_MotorControl;`) and
+that one `Frame` is reused by every `CallStmt` invoking `Motor1`, since
+re-executing the same bound tree against the same persistent tags is safe
+and correct — that persistence *is* the point of an instance. An FC call is
+cloned **once per call site**, never shared even between two calls to the
+same FC type, so each call site's `VAR_OUTPUT`/`VAR_TEMP` storage stays
+individually addressable and inspectable (e.g. for a future online-monitor
+view) rather than aliasing another call site's scratch space.
+
+**Naming and scoping.**
+- `DATA_BLOCK DB1 VAR Speed : INT; END_VAR END_DATA_BLOCK` declares
+  `"DB1.Speed"` directly into `TagStore` — a data block is mechanically "a
+  persistent named record with no code," so it reuses `TagStore`'s existing
+  flat name-keying with zero new addressing machinery. Real Siemens-style
+  numbered/byte-offset `%DB1.DBX0.0` addressing is a deferred, unrelated
+  feature (see below); `DB1` here is purely a naming convention, not a
+  memory area.
+- An FB instance's members are declared under `"<InstanceName>.<Member>"`
+  (`Motor1.Running`, and recursively `Outer1.Inner.Out1` for nested
+  instances), reusing the same mechanism.
+- **Inside** a POU body, members — including a nested instance's members —
+  are referenced by bare name (`Speed`, `TmpTimer.Q`): the cloned body has
+  no idea which instance prefix it was bound under, which is exactly what
+  makes the clone-and-bind step a straightforward recursive reuse of the
+  top-level `PROGRAM` binder. `DATA_BLOCK` members are the one exception —
+  referenced by full dotted name from anywhere, since they're global storage
+  rather than scoped to a call.
+- Nothing currently stops code outside an instance from writing its
+  `VAR_OUTPUT` members directly (`Motor1.Running := TRUE;` compiles) —
+  flagged as a known gap below, not fixed, since it needs a write-visibility
+  concept `TagStore` doesn't have yet.
+
+**Call syntax** is statement-only in v1 (no function calls in expression
+position): `CalleeName(Param := inputExpr, Param => outputTarget);`. This
+"box with named in/out pins" shape is deliberately the same shape a future
+Ladder Diagram front-end needs for an FB instance placed inline on a rung,
+so `CallStmt`/`Frame` are built to be reusable there rather than needing a
+second calling convention later. An FB call may omit any `VAR_INPUT` (an
+undriven pin keeps its last value, matching Siemens semantics for a
+persistent instance); an FC call must bind every `VAR_INPUT` explicitly —
+omitting one is a load-time error, since FC call-site storage is a hidden
+implementation detail rather than a real instance a user would think to
+re-drive between calls.
+
+**Type coercion on write.** A bare integer literal (`200`) is always parsed
+as `DINT` (`Parser::parsePrimary()` has no knowledge of the assignment
+target's declared type at parse time). `Interpreter` therefore narrows every
+value written through an `AssignStmt` target or a `CallArg` binding to that
+target's actual declared `TypeId` (`coerceToType()` in `interpreter.cpp`,
+alongside the existing `fromDouble`/`asDouble` numeric-promotion helpers
+arithmetic already used) rather than assuming the evaluated `Value`'s active
+variant alternative already matches — writing e.g. a `DINT`-valued literal
+into an `INT`-declared tag narrows to `int16_t` instead of leaving a
+type/variant mismatch latent until the next read. Assigning between
+genuinely incompatible types (e.g. `BOOL` into `DINT`) still throws
+`std::runtime_error` at run time.
+
+**Cycle detection.** Recursive POU call graphs — an FB instantiating itself,
+directly or through another FB, or (in principle) an FC calling itself —
+have no well-defined output for clone-and-rebind (unbounded recursive
+cloning) and are rejected with `std::runtime_error` at load time via a
+"currently expanding" name stack in the binder, not left to overflow the
+stack or loop forever.
+
+**v1 scope, and what's explicitly deferred** (not silently dropped — tracked
+in `docs/roadmap.md`): standard `TON`/`TOF`/`CTU`/`CTD` timer/counter FBs
+(blocked on exposing scan-cycle timing as a readable tag first); function
+calls in expression position; real `%DB` numbered/byte-offset addressing;
+arrays/structs; multi-file compilation units (today: one `.st` source with
+all POU/DB/PROGRAM definitions); `VAR_OUTPUT` write-protection from outside
+an instance; `VAR_IN_OUT` pass-by-reference parameters.
+
 ## Modbus TCP I/O driver (`io/modbus_*`, `net/`)
 
 `ModbusTcpIoDriver` is a Modbus TCP **client (master)**: it polls real (or,
@@ -221,8 +319,15 @@ such consumer exists yet, so this hasn't been redesigned — see
 ## Testing
 
 Each layer is tested in isolation (`tests/tags`, `tests/core`, `tests/io`,
-`tests/st/{lexer,parser,interpreter}_test.cpp`) using GoogleTest, fetched via
-CMake `FetchContent`. `ScanEngine` is tested primarily through `runOnce()`
+`tests/st/{lexer,parser,pou_binder,interpreter}_test.cpp`) using GoogleTest,
+fetched via CMake `FetchContent`. `tests/st/pou_binder_test.cpp` is the
+concrete proof of the clone-and-rebind design: two instances of the same FB
+type get independently-addressable, independently-stateful `TagId`s; nested
+instance-of-instance produces four independently-addressable groups; two FC
+call sites don't leak `VAR_TEMP` into each other; and each of the binder's
+load-time error cases (unresolved instance type, unknown call-arg name,
+wrong-direction `:=`/`=>` binding, omitted required FC input, circular FB
+instantiation) is exercised directly. `ScanEngine` is tested primarily through `runOnce()`
 for determinism; a few tests exercise the real threaded `start()`/`stop()`
 loop, including that falling behind schedule increments `resyncCount`.
 `tests/core/rt_scheduling_test.cpp` verifies `applyRealtimePolicy()`

@@ -3,18 +3,31 @@
 ## Phase 1 (this repository, current state)
 
 Core scan-cycle engine, thread-safe tag database, simulated I/O, a real
-minimal Structured Text pipeline, opt-in real-time OS scheduling
+minimal Structured Text pipeline — now including `DATA_BLOCK`s and
+user-defined `FUNCTION_BLOCK`/`FUNCTION` POUs with instance/call-site state
+isolation (`st/pou_binder.hpp`; see "Data Blocks, Function Blocks, and
+Functions" in `docs/architecture.md`) — opt-in real-time OS scheduling
 (priority/affinity/memory locking via `core/rt_scheduling`), and a Modbus
 TCP client (master) I/O driver (`io/modbus_tcp_driver.hpp`, built on the
 vendored `nanoMODBUS` codec). See `docs/architecture.md`.
 
 Explicitly out of scope for Phase 1's ST subset (parser will reject these):
 - `FOR` loops, `CASE` statements, `REPEAT` loops
-- User-defined `FUNCTION_BLOCK`s and `FUNCTION`s, and calls to them
 - Arrays and structured (`STRUCT`) types
 - Additional elementary types: `SINT/USINT/UINT/UDINT/LINT/ULINT/WORD/DWORD/LWORD`
 - Multiple POUs scheduled at different rates/priorities within one engine
   (`ScanEngine` currently hosts exactly one top-level `IProgram`)
+- Function calls in expression position (`X := FC_Foo(In1 := 1);` — v1 only
+  supports calls as their own statement)
+- Real Siemens-style numbered/byte-offset `%DB1.DBX0.0` addressing (today's
+  `DATA_BLOCK` members are addressed by dotted name only, e.g. `DB1.Speed`)
+- Multi-file compilation units (one `.st` source holds all `DATA_BLOCK`/
+  `FUNCTION_BLOCK`/`FUNCTION`/`PROGRAM` definitions)
+- `VAR_IN_OUT` pass-by-reference parameters
+- `VAR_OUTPUT` write-protection from outside the owning instance (nothing
+  currently stops `Motor1.Running := TRUE;` from outside `Motor1`)
+- Standard `TON`/`TOF`/`CTU`/`CTD` timer/counter FBs (blocked on exposing
+  scan-cycle timing as a readable tag first — see Phase 2 below)
 
 ## Phase 2 and beyond
 
@@ -49,8 +62,14 @@ Explicitly out of scope for Phase 1's ST subset (parser will reject these):
   since there's no real consumer yet to justify the complexity. Likely fix:
   per-tag atomics or a seqlock/double-buffer scheme for scalar types, to
   bound the scan thread's worst-case wait time.
-- **Expanded ST language surface**: `FOR`, `CASE`, function blocks/functions,
-  arrays/structs, remaining elementary types.
+- **Standard timer/counter FBs**: `TON`/`TOF`/`CTU`/`CTD`, ship as ordinary
+  ST-defined `FUNCTION_BLOCK`s using the Phase 1 clone-and-rebind mechanism
+  (same as the `R_TRIG`-style edge detector already tested), once
+  `ScanContext`'s cycle timing is exposed as a readable tag.
+- **Expanded ST language surface**: `FOR`, `CASE`, function calls in
+  expression position, arrays/structs, remaining elementary types,
+  `VAR_IN_OUT` parameters, `VAR_OUTPUT` write-protection, real `%DB`
+  numbered/byte-offset addressing, multi-file compilation units.
 - **Persistence**: retentive (`VAR RETAIN`) variables surviving a restart.
 - **HMI/Web UI**: a way to observe/force tag values without recompiling a
   program (out of scope until the above runtime pieces are solid).

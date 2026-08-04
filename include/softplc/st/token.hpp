@@ -46,11 +46,18 @@ enum class TokenType {
     KwLreal,
     KwTime,
     KwString,
+    KwFunctionBlock,
+    KwEndFunctionBlock,
+    KwFunction,
+    KwEndFunction,
+    KwVarTemp,
+    KwDataBlock,
+    KwEndDataBlock,
 
     // Punctuation & operators
     Colon,
     Semicolon,
-    Assign,  // :=
+    Assign,   // :=
     LParen,
     RParen,
     Plus,
@@ -63,6 +70,9 @@ enum class TokenType {
     Gt,
     Le,
     Ge,
+    Dot,      // .
+    Comma,    // ,
+    RArrow,   // =>
 
     EndOfFile,
 };

@@ -11,6 +11,7 @@ add_executable(softplc_tests
     net/tcp_socket_test.cpp
     st/lexer_test.cpp
     st/parser_test.cpp
+    st/pou_binder_test.cpp
     st/interpreter_test.cpp
     support/mock_modbus_server.cpp
 )

@@ -29,6 +29,13 @@ const std::unordered_map<std::string, TokenType>& keywordTable() {
         {"DINT", TokenType::KwDint},         {"REAL", TokenType::KwReal},
         {"LREAL", TokenType::KwLreal},       {"TIME", TokenType::KwTime},
         {"STRING", TokenType::KwString},
+        {"FUNCTION_BLOCK", TokenType::KwFunctionBlock},
+        {"END_FUNCTION_BLOCK", TokenType::KwEndFunctionBlock},
+        {"FUNCTION", TokenType::KwFunction},
+        {"END_FUNCTION", TokenType::KwEndFunction},
+        {"VAR_TEMP", TokenType::KwVarTemp},
+        {"DATA_BLOCK", TokenType::KwDataBlock},
+        {"END_DATA_BLOCK", TokenType::KwEndDataBlock},
     };
     return table;
 }
@@ -179,7 +186,14 @@ Token Lexer::nextToken() {
             return makeToken(TokenType::Slash, "/");
         case '=':
             advance();
+            if (match('>')) return makeToken(TokenType::RArrow, "=>");
             return makeToken(TokenType::Eq, "=");
+        case '.':
+            advance();
+            return makeToken(TokenType::Dot, ".");
+        case ',':
+            advance();
+            return makeToken(TokenType::Comma, ",");
         case '<':
             advance();
             if (match('>')) return makeToken(TokenType::Ne, "<>");

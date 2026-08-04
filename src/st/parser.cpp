@@ -57,6 +57,71 @@ void Parser::error(const std::string& message) const {
     throw ParseError(message, peek().line, peek().column);
 }
 
+CompilationUnit Parser::parseCompilationUnit() {
+    CompilationUnit unit;
+    bool haveProgram = false;
+
+    while (!check(TokenType::EndOfFile)) {
+        if (check(TokenType::KwFunctionBlock)) {
+            unit.pous.push_back(parsePouDef(/*isFunction=*/false));
+        } else if (check(TokenType::KwFunction)) {
+            unit.pous.push_back(parsePouDef(/*isFunction=*/true));
+        } else if (check(TokenType::KwDataBlock)) {
+            unit.dataBlocks.push_back(parseDataBlockDef());
+        } else if (check(TokenType::KwProgram)) {
+            if (haveProgram) {
+                error("a compilation unit may only contain one PROGRAM");
+            }
+            unit.program = parseProgram();
+            haveProgram = true;
+        } else {
+            error("expected FUNCTION_BLOCK, FUNCTION, DATA_BLOCK or PROGRAM");
+        }
+    }
+
+    if (!haveProgram) {
+        error("a compilation unit must contain exactly one PROGRAM");
+    }
+    return unit;
+}
+
+PouAst Parser::parsePouDef(bool isFunction) {
+    PouAst pou;
+    pou.isFunction = isFunction;
+
+    if (isFunction) {
+        expect(TokenType::KwFunction, "FUNCTION");
+    } else {
+        expect(TokenType::KwFunctionBlock, "FUNCTION_BLOCK");
+    }
+    pou.name = expect(TokenType::Identifier, "POU name").text;
+
+    const VarBlockContext context = isFunction ? VarBlockContext::Function : VarBlockContext::FunctionBlock;
+    while (check(TokenType::KwVar) || check(TokenType::KwVarInput) || check(TokenType::KwVarOutput) ||
+           check(TokenType::KwVarTemp)) {
+        parseVarBlock(pou.varDecls, context);
+    }
+
+    const TokenType endToken = isFunction ? TokenType::KwEndFunction : TokenType::KwEndFunctionBlock;
+    pou.body = parseStatementList({endToken});
+    expect(endToken, isFunction ? "END_FUNCTION" : "END_FUNCTION_BLOCK");
+
+    return pou;
+}
+
+DataBlockAst Parser::parseDataBlockDef() {
+    DataBlockAst db;
+    expect(TokenType::KwDataBlock, "DATA_BLOCK");
+    db.name = expect(TokenType::Identifier, "data block name").text;
+
+    while (check(TokenType::KwVar)) {
+        parseVarBlock(db.varDecls, VarBlockContext::DataBlock);
+    }
+
+    expect(TokenType::KwEndDataBlock, "END_DATA_BLOCK");
+    return db;
+}
+
 StProgramAst Parser::parseProgram() {
     StProgramAst ast;
 
@@ -65,7 +130,7 @@ StProgramAst Parser::parseProgram() {
 
     while (check(TokenType::KwVar) || check(TokenType::KwVarInput) ||
            check(TokenType::KwVarOutput)) {
-        parseVarBlock(ast.varDecls);
+        parseVarBlock(ast.varDecls, VarBlockContext::Program);
     }
 
     ast.body = parseStatementList({TokenType::KwEndProgram});
@@ -74,7 +139,7 @@ StProgramAst Parser::parseProgram() {
     return ast;
 }
 
-void Parser::parseVarBlock(std::vector<VarDecl>& decls) {
+void Parser::parseVarBlock(std::vector<VarDecl>& decls, VarBlockContext context) {
     VarKind kind;
     if (match(TokenType::KwVar)) {
         kind = VarKind::Var;
@@ -82,8 +147,14 @@ void Parser::parseVarBlock(std::vector<VarDecl>& decls) {
         kind = VarKind::VarInput;
     } else if (match(TokenType::KwVarOutput)) {
         kind = VarKind::VarOutput;
+    } else if (match(TokenType::KwVarTemp)) {
+        kind = VarKind::VarTemp;
     } else {
-        error("expected VAR, VAR_INPUT or VAR_OUTPUT");
+        error("expected VAR, VAR_INPUT, VAR_OUTPUT or VAR_TEMP");
+    }
+
+    if (context == VarBlockContext::Function && kind == VarKind::Var) {
+        error("FUNCTION bodies cannot declare persistent VAR (use VAR_TEMP for scratch space)");
     }
 
     while (!check(TokenType::KwEndVar)) {
@@ -96,10 +167,24 @@ void Parser::parseVarBlock(std::vector<VarDecl>& decls) {
         }
 
         expect(TokenType::Colon, "':'");
-        decl.type = parseTypeName();
 
-        if (match(TokenType::Assign)) {
-            decl.initialValue = parseLiteralValue(decl.type);
+        if (auto elemType = tryParseElementaryType()) {
+            decl.elementaryType = elemType;
+            if (match(TokenType::Assign)) {
+                decl.initialValue = parseLiteralValue(*elemType);
+            }
+        } else if (check(TokenType::Identifier)) {
+            const bool instancesAllowed =
+                (context == VarBlockContext::Program || context == VarBlockContext::FunctionBlock) &&
+                kind == VarKind::Var;
+            if (!instancesAllowed) {
+                error(
+                    "function block instances may only be declared in a VAR block of a "
+                    "PROGRAM or FUNCTION_BLOCK");
+            }
+            decl.instanceOfType = advance().text;
+        } else {
+            error("expected a type name or function block type");
         }
 
         expect(TokenType::Semicolon, "';'");
@@ -108,28 +193,44 @@ void Parser::parseVarBlock(std::vector<VarDecl>& decls) {
     expect(TokenType::KwEndVar, "END_VAR");
 }
 
-tags::TypeId Parser::parseTypeName() {
-    const Token& tok = advance();
-    switch (tok.type) {
+std::optional<tags::TypeId> Parser::tryParseElementaryType() {
+    switch (peek().type) {
         case TokenType::KwBool:
+            advance();
             return tags::TypeId::Bool;
         case TokenType::KwByte:
+            advance();
             return tags::TypeId::Byte;
         case TokenType::KwInt:
+            advance();
             return tags::TypeId::Int;
         case TokenType::KwDint:
+            advance();
             return tags::TypeId::DInt;
         case TokenType::KwReal:
+            advance();
             return tags::TypeId::Real;
         case TokenType::KwLreal:
+            advance();
             return tags::TypeId::LReal;
         case TokenType::KwTime:
+            advance();
             return tags::TypeId::Time;
         case TokenType::KwString:
+            advance();
             return tags::TypeId::String;
         default:
-            error("expected a type name (BOOL, BYTE, INT, DINT, REAL, LREAL, TIME, STRING)");
+            return std::nullopt;
     }
+}
+
+std::string Parser::parseDottedIdentifier() {
+    std::string name = expect(TokenType::Identifier, "identifier").text;
+    while (match(TokenType::Dot)) {
+        name += '.';
+        name += expect(TokenType::Identifier, "identifier after '.'").text;
+    }
+    return name;
 }
 
 tags::Value Parser::parseLiteralValue(tags::TypeId declaredType) {
@@ -213,8 +314,8 @@ StmtList Parser::parseStatementList(std::initializer_list<TokenType> terminators
 StmtPtr Parser::parseStatement() {
     if (check(TokenType::KwIf)) return parseIfStatement();
     if (check(TokenType::KwWhile)) return parseWhileStatement();
-    if (check(TokenType::Identifier)) return parseAssignStatement();
-    error("expected a statement (assignment, IF or WHILE)");
+    if (check(TokenType::Identifier)) return parseAssignOrCallStatement();
+    error("expected a statement (assignment, IF, WHILE or a call)");
 }
 
 StmtPtr Parser::parseIfStatement() {
@@ -253,12 +354,45 @@ StmtPtr Parser::parseWhileStatement() {
     return std::make_unique<WhileStmt>(std::move(cond), std::move(body));
 }
 
-StmtPtr Parser::parseAssignStatement() {
-    const Token& nameTok = expect(TokenType::Identifier, "identifier");
+StmtPtr Parser::parseAssignOrCallStatement() {
+    std::string name = parseDottedIdentifier();
+
+    if (match(TokenType::LParen)) {
+        return parseCallStatementRest(std::move(name));
+    }
+
     expect(TokenType::Assign, "':='");
     ExprPtr value = parseExpression();
     expect(TokenType::Semicolon, "';'");
-    return std::make_unique<AssignStmt>(nameTok.text, std::move(value));
+    return std::make_unique<AssignStmt>(std::move(name), std::move(value));
+}
+
+StmtPtr Parser::parseCallStatementRest(std::string calleeName) {
+    std::vector<CallArg> args;
+    if (!check(TokenType::RParen)) {
+        args.push_back(parseCallArg());
+        while (match(TokenType::Comma)) {
+            args.push_back(parseCallArg());
+        }
+    }
+    expect(TokenType::RParen, "')'");
+    expect(TokenType::Semicolon, "';'");
+    return std::make_unique<CallStmt>(std::move(calleeName), std::move(args));
+}
+
+CallArg Parser::parseCallArg() {
+    CallArg arg;
+    arg.paramName = expect(TokenType::Identifier, "parameter name").text;
+    if (match(TokenType::Assign)) {
+        arg.isOutput = false;
+        arg.inputExpr = parseExpression();
+    } else if (match(TokenType::RArrow)) {
+        arg.isOutput = true;
+        arg.outputTargetName = parseDottedIdentifier();
+    } else {
+        error("expected ':=' or '=>' after parameter name");
+    }
+    return arg;
 }
 
 ExprPtr Parser::parseExpression() { return parseOr(); }
@@ -376,8 +510,7 @@ ExprPtr Parser::parsePrimary() {
         return std::make_unique<LiteralExpr>(tok.stringValue);
     }
     if (check(TokenType::Identifier)) {
-        const Token& tok = advance();
-        return std::make_unique<IdentifierExpr>(tok.text);
+        return std::make_unique<IdentifierExpr>(parseDottedIdentifier());
     }
     if (match(TokenType::LParen)) {
         ExprPtr expr = parseExpression();

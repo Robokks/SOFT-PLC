@@ -18,6 +18,9 @@ private:
     tags::Value evaluate(const Expr& expr, const tags::TagStore& tags) const;
     void execStmt(const Stmt& stmt, tags::TagStore& tags) const;
     void execBlock(const StmtList& stmts, tags::TagStore& tags) const;
+    // Runs an FB instance's or FC call site's bound Frame: applies VAR_TEMP resets,
+    // copies ':=' inputs in, executes the frame's body, copies '=>' outputs out.
+    void execCall(const CallStmt& call, tags::TagStore& tags) const;
 
     const StProgramAst& program_;
 };

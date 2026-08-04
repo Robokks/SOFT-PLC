@@ -66,6 +66,21 @@ TypeId numericResultType(TypeId a, TypeId b) {
     return kOrder[static_cast<std::size_t>(std::max(numericRank(a), numericRank(b)))];
 }
 
+// Bare numeric literals (and FC/FB call-arg values) are evaluated without knowledge of
+// the assignment target's declared type (LiteralExpr::value is always DInt for integer
+// literals -- see Parser::parsePrimary), so every write through the interpreter must
+// coerce to the target tag's declared type rather than assuming the evaluated Value's
+// variant alternative already matches it.
+Value coerceToType(const Value& v, TypeId target) {
+    const TypeId source = tags::typeOf(v);
+    if (source == target) return v;
+    if (isNumeric(source) && isNumeric(target)) {
+        return fromDouble(asDouble(v), target);
+    }
+    throw std::runtime_error(std::string("type mismatch: cannot assign ") + tags::toString(source) +
+                              " value to " + tags::toString(target) + " target");
+}
+
 Value evalArithmetic(BinaryOp op, const Value& l, const Value& r) {
     const TypeId lt = tags::typeOf(l);
     const TypeId rt = tags::typeOf(r);
@@ -271,7 +286,8 @@ void Interpreter::execStmt(const Stmt& stmt, tags::TagStore& tags) const {
             if (assign.targetId == tags::kInvalidTagId) {
                 throw std::runtime_error("unresolved assignment target: " + assign.target);
             }
-            tags.write(assign.targetId, evaluate(*assign.value, tags));
+            tags.write(assign.targetId,
+                       coerceToType(evaluate(*assign.value, tags), tags.typeOf(assign.targetId)));
             return;
         }
         case StmtKind::If: {
@@ -307,6 +323,10 @@ void Interpreter::execStmt(const Stmt& stmt, tags::TagStore& tags) const {
             }
             return;
         }
+        case StmtKind::Call: {
+            execCall(static_cast<const CallStmt&>(stmt), tags);
+            return;
+        }
     }
     throw std::logic_error("Interpreter::execStmt: unreachable statement kind");
 }
@@ -314,6 +334,36 @@ void Interpreter::execStmt(const Stmt& stmt, tags::TagStore& tags) const {
 void Interpreter::execBlock(const StmtList& stmts, tags::TagStore& tags) const {
     for (const auto& stmt : stmts) {
         execStmt(*stmt, tags);
+    }
+}
+
+void Interpreter::execCall(const CallStmt& call, tags::TagStore& tags) const {
+    if (call.frameIndex == kInvalidFrame || call.frameIndex >= program_.frames.size()) {
+        throw std::runtime_error("unresolved call target: " + call.calleeName);
+    }
+    const Frame& frame = program_.frames[call.frameIndex];
+
+    // VAR_TEMP is scratch space: reset before every execution of this frame, never
+    // retained across calls (unlike VAR_INPUT, which keeps its last value if unbound
+    // this call, and unlike an FB instance's persistent VAR).
+    for (const auto& [tagId, resetValue] : frame.tempResets) {
+        tags.write(tagId, resetValue);
+    }
+
+    for (const auto& arg : call.args) {
+        if (!arg.isOutput) {
+            tags.write(arg.paramTagId,
+                       coerceToType(evaluate(*arg.inputExpr, tags), tags.typeOf(arg.paramTagId)));
+        }
+    }
+
+    execBlock(frame.body, tags);
+
+    for (const auto& arg : call.args) {
+        if (arg.isOutput) {
+            tags.write(arg.outputTargetId,
+                       coerceToType(tags.read(arg.paramTagId), tags.typeOf(arg.outputTargetId)));
+        }
     }
 }
 

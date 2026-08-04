@@ -129,6 +129,163 @@ TEST(InterpreterTest, BlinkExampleTogglesOutputAfterThreshold) {
     EXPECT_TRUE(std::get<bool>(tags.read(ledId)));
 }
 
+TEST(InterpreterTest, EdgeDetectFbTriggersOnRisingEdgeAcrossScans) {
+    const std::string source = R"(
+        FUNCTION_BLOCK FB_REdge
+        VAR_INPUT
+            CLK : BOOL;
+        END_VAR
+        VAR_OUTPUT
+            Q : BOOL;
+        END_VAR
+        VAR
+            M : BOOL;
+        END_VAR
+        Q := CLK AND NOT M;
+        M := CLK;
+        END_FUNCTION_BLOCK
+
+        PROGRAM Test
+        VAR
+            Trigger : BOOL := FALSE;
+            Edge1 : FB_REdge;
+        END_VAR
+        Edge1(CLK := Trigger);
+        END_PROGRAM
+    )";
+
+    tags::TagStore tags;
+    auto program = st::StProgram::load(source, tags);
+    auto triggerId = tags.find("Trigger").value();
+    auto edgeQId = tags.find("Edge1.Q").value();
+
+    io::SimulatedIoDriver io;
+    core::ScanEngine engine(tags, io, program, std::chrono::milliseconds(10));
+
+    // Scan 1: Trigger stays false -- no edge.
+    engine.runOnce();
+    EXPECT_FALSE(std::get<bool>(tags.read(edgeQId)));
+
+    // Scan 2: Trigger rises to true -- Q pulses true this scan.
+    tags.write(triggerId, true);
+    engine.runOnce();
+    EXPECT_TRUE(std::get<bool>(tags.read(edgeQId)));
+
+    // Scan 3: Trigger stays true (already high) -- not a new edge, Q drops back.
+    engine.runOnce();
+    EXPECT_FALSE(std::get<bool>(tags.read(edgeQId)));
+
+    // Scan 4/5: Trigger falls then rises again -- a second pulse.
+    tags.write(triggerId, false);
+    engine.runOnce();
+    tags.write(triggerId, true);
+    engine.runOnce();
+    EXPECT_TRUE(std::get<bool>(tags.read(edgeQId)));
+}
+
+TEST(InterpreterTest, FunctionCallDoesNotLeakStateBetweenScans) {
+    const std::string source = R"(
+        FUNCTION FC_Square
+        VAR_INPUT
+            In1 : DINT;
+        END_VAR
+        VAR_OUTPUT
+            Out1 : DINT;
+        END_VAR
+        Out1 := In1 * In1;
+        END_FUNCTION
+
+        PROGRAM Test
+        VAR
+            N : DINT := 0;
+            Result : DINT := 0;
+        END_VAR
+        FC_Square(In1 := N, Out1 => Result);
+        END_PROGRAM
+    )";
+
+    tags::TagStore tags;
+    auto program = st::StProgram::load(source, tags);
+    auto nId = tags.find("N").value();
+    auto resultId = tags.find("Result").value();
+
+    io::SimulatedIoDriver io;
+    core::ScanEngine engine(tags, io, program, std::chrono::milliseconds(10));
+
+    tags.write(nId, std::int32_t{3});
+    engine.runOnce();
+    EXPECT_EQ(std::get<std::int32_t>(tags.read(resultId)), 9);
+
+    tags.write(nId, std::int32_t{5});
+    engine.runOnce();
+    EXPECT_EQ(std::get<std::int32_t>(tags.read(resultId)), 25);
+}
+
+TEST(InterpreterTest, MultiPouIntegrationDbFbAndFcTogether) {
+    const std::string source = R"(
+        DATA_BLOCK DB1
+        VAR
+            Setpoint : DINT := 50;
+        END_VAR
+        END_DATA_BLOCK
+
+        FUNCTION_BLOCK FB_Limiter
+        VAR_INPUT
+            In1 : DINT;
+        END_VAR
+        VAR_OUTPUT
+            Out1 : DINT;
+        END_VAR
+        IF In1 > DB1.Setpoint THEN
+            Out1 := DB1.Setpoint;
+        ELSE
+            Out1 := In1;
+        END_IF;
+        END_FUNCTION_BLOCK
+
+        FUNCTION FC_Double
+        VAR_INPUT
+            In1 : DINT;
+        END_VAR
+        VAR_OUTPUT
+            Out1 : DINT;
+        END_VAR
+        Out1 := In1 * 2;
+        END_FUNCTION
+
+        PROGRAM Test
+        VAR
+            Raw : DINT := 40;
+            Limited : DINT;
+            Doubled : DINT;
+            Limiter1 : FB_Limiter;
+        END_VAR
+        Limiter1(In1 := Raw, Out1 => Limited);
+        FC_Double(In1 := Limited, Out1 => Doubled);
+        END_PROGRAM
+    )";
+
+    tags::TagStore tags;
+    auto program = st::StProgram::load(source, tags);
+    auto limitedId = tags.find("Limited").value();
+    auto doubledId = tags.find("Doubled").value();
+    auto rawId = tags.find("Raw").value();
+
+    io::SimulatedIoDriver io;
+    core::ScanEngine engine(tags, io, program, std::chrono::milliseconds(10));
+
+    // Raw (40) is under DB1.Setpoint (50): passes through unchanged, then doubled.
+    engine.runOnce();
+    EXPECT_EQ(std::get<std::int32_t>(tags.read(limitedId)), 40);
+    EXPECT_EQ(std::get<std::int32_t>(tags.read(doubledId)), 80);
+
+    // Raise Raw above the setpoint: the limiter clamps it before doubling.
+    tags.write(rawId, std::int32_t{999});
+    engine.runOnce();
+    EXPECT_EQ(std::get<std::int32_t>(tags.read(limitedId)), 50);
+    EXPECT_EQ(std::get<std::int32_t>(tags.read(doubledId)), 100);
+}
+
 TEST(InterpreterTest, UndeclaredIdentifierThrowsAtLoadTime) {
     const std::string source = R"(
         PROGRAM Test
@@ -141,4 +298,47 @@ TEST(InterpreterTest, UndeclaredIdentifierThrowsAtLoadTime) {
 
     tags::TagStore tags;
     EXPECT_THROW(st::StProgram::load(source, tags), std::runtime_error);
+}
+
+TEST(InterpreterTest, IntegerLiteralAssignedToNonDIntTargetCoercesToDeclaredType) {
+    // Bare integer literals are always parsed as DINT (see Parser::parsePrimary);
+    // the interpreter must narrow to X's actual declared type (INT) on assignment
+    // rather than leaving a DInt-typed Value in a Value variant declared as Int.
+    const std::string source = R"(
+        PROGRAM Test
+        VAR
+            X : INT := 0;
+        END_VAR
+        X := 200;
+        END_PROGRAM
+    )";
+
+    tags::TagStore tags;
+    auto program = st::StProgram::load(source, tags);
+    auto id = tags.find("X").value();
+
+    io::SimulatedIoDriver io;
+    core::ScanEngine engine(tags, io, program, std::chrono::milliseconds(10));
+    engine.runOnce();
+
+    EXPECT_EQ(std::get<std::int16_t>(tags.read(id)), 200);
+}
+
+TEST(InterpreterTest, AssigningIncompatibleTypeThrowsAtRuntime) {
+    const std::string source = R"(
+        PROGRAM Test
+        VAR
+            X : DINT := 0;
+            Flag : BOOL := TRUE;
+        END_VAR
+        X := Flag;
+        END_PROGRAM
+    )";
+
+    tags::TagStore tags;
+    auto program = st::StProgram::load(source, tags);
+
+    io::SimulatedIoDriver io;
+    core::ScanEngine engine(tags, io, program, std::chrono::milliseconds(10));
+    EXPECT_THROW(engine.runOnce(), std::runtime_error);
 }

@@ -11,6 +11,7 @@ add_library(softplc_core STATIC
     net/tcp_listener.cpp
     st/lexer.cpp
     st/parser.cpp
+    st/pou_binder.cpp
     st/interpreter.cpp
     st/st_program.cpp
 )
