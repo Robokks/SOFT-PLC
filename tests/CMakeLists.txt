@@ -6,15 +6,19 @@ add_executable(softplc_tests
     io/modbus_mapping_test.cpp
     io/modbus_client_test.cpp
     io/modbus_tcp_driver_test.cpp
+    io/modbus_rtu_bus_test.cpp
+    io/modbus_rtu_driver_test.cpp
     core/scan_engine_test.cpp
     core/rt_scheduling_test.cpp
     net/tcp_socket_test.cpp
+    net/serial_port_test.cpp
     st/lexer_test.cpp
     st/parser_test.cpp
     st/pou_binder_test.cpp
     st/interpreter_test.cpp
     st/standard_fbs_test.cpp
     support/mock_modbus_server.cpp
+    support/mock_modbus_rtu_server.cpp
 )
 
 target_include_directories(softplc_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

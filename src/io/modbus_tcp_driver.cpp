@@ -1,81 +1,9 @@
 #include "softplc/io/modbus_tcp_driver.hpp"
 
-#include <bit>
 #include <stdexcept>
 #include <thread>
 
 namespace softplc::io {
-
-namespace {
-
-tags::Value decodePointValue(const ModbusPointMapping& point, const ReadBatch& batch,
-                              const std::vector<std::uint16_t>& registers,
-                              const std::vector<bool>& bits) {
-    const std::size_t offset = static_cast<std::size_t>(point.registerAddress - batch.startAddress);
-
-    if (point.registerType == RegisterType::Coil || point.registerType == RegisterType::DiscreteInput) {
-        return bits.at(offset);
-    }
-
-    switch (point.type) {
-        case tags::TypeId::Byte:
-            return static_cast<std::uint8_t>(registers.at(offset) & 0xFF);
-        case tags::TypeId::Int:
-            return static_cast<std::int16_t>(registers.at(offset));
-        case tags::TypeId::DInt:
-        case tags::TypeId::Real: {
-            const std::uint16_t a = registers.at(offset);
-            const std::uint16_t b = registers.at(offset + 1);
-            const std::uint16_t high = point.wordOrder == WordOrder::BigEndianWords ? a : b;
-            const std::uint16_t low = point.wordOrder == WordOrder::BigEndianWords ? b : a;
-            const std::uint32_t combined = (static_cast<std::uint32_t>(high) << 16) | low;
-            if (point.type == tags::TypeId::DInt) {
-                return static_cast<std::int32_t>(combined);
-            }
-            return std::bit_cast<float>(combined);
-        }
-        default:
-            return tags::defaultValueFor(point.type);
-    }
-}
-
-// Encodes `value` into `registers` at the point's offset within its batch (offset
-// computed by the caller, since this is also used while assembling a whole batch's
-// register array from multiple points).
-void encodePointValue(const ModbusPointMapping& point, const tags::Value& value, std::size_t offset,
-                       std::vector<std::uint16_t>& registers) {
-    switch (point.type) {
-        case tags::TypeId::Byte:
-            registers.at(offset) = static_cast<std::uint16_t>(std::get<std::uint8_t>(value));
-            return;
-        case tags::TypeId::Int:
-            registers.at(offset) = static_cast<std::uint16_t>(std::get<std::int16_t>(value));
-            return;
-        case tags::TypeId::DInt:
-        case tags::TypeId::Real: {
-            std::uint32_t combined = 0;
-            if (point.type == tags::TypeId::DInt) {
-                combined = static_cast<std::uint32_t>(std::get<std::int32_t>(value));
-            } else {
-                combined = std::bit_cast<std::uint32_t>(std::get<float>(value));
-            }
-            const std::uint16_t high = static_cast<std::uint16_t>(combined >> 16);
-            const std::uint16_t low = static_cast<std::uint16_t>(combined & 0xFFFFu);
-            if (point.wordOrder == WordOrder::BigEndianWords) {
-                registers.at(offset) = high;
-                registers.at(offset + 1) = low;
-            } else {
-                registers.at(offset) = low;
-                registers.at(offset + 1) = high;
-            }
-            return;
-        }
-        default:
-            return;
-    }
-}
-
-}  // namespace
 
 ModbusTcpIoDriver::ModbusTcpIoDriver(std::vector<ModbusDeviceConfig> deviceConfigs) {
     for (auto& config : deviceConfigs) {
@@ -221,7 +149,7 @@ void ModbusTcpIoDriver::pollOnce(Device& device) {
         std::lock_guard<std::mutex> cacheLock(device.cacheMutex);
         for (const ModbusPointMapping* point : batch.points) {
             const auto idx = static_cast<std::size_t>(point - device.inputPoints.data());
-            device.inputCache[idx].value = decodePointValue(*point, batch, registers, bits);
+            device.inputCache[idx].value = decodeModbusPointValue(*point, batch, registers, bits);
             device.inputCache[idx].valid = true;
         }
     }
@@ -260,7 +188,7 @@ void ModbusTcpIoDriver::pollOnce(Device& device) {
             for (std::size_t i = 0; i < batch.points.size(); ++i) {
                 const ModbusPointMapping* point = batch.points[i];
                 const auto offset = static_cast<std::size_t>(point->registerAddress - batch.startAddress);
-                encodePointValue(*point, snapshot[i], offset, registersToWrite);
+                encodeModbusPointValue(*point, snapshot[i], offset, registersToWrite);
             }
             result = device.client->writeRegisters(batch.startAddress, registersToWrite);
         }

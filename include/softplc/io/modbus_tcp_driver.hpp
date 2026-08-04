@@ -15,15 +15,6 @@
 
 namespace softplc::io {
 
-struct ModbusDeviceDiagnostics {
-    bool connected = false;
-    std::uint64_t successfulPolls = 0;
-    std::uint64_t failedPolls = 0;
-    std::uint64_t consecutiveFailures = 0;
-    std::string lastError;
-    std::chrono::steady_clock::time_point lastSuccessTime{};
-};
-
 // Modbus TCP client (master) IIoDriver: polls one or more configured devices on
 // dedicated background threads (one per device, never the scan thread) and feeds
 // %I/%Q tags, as a drop-in alternative to SimulatedIoDriver. readInputs()/

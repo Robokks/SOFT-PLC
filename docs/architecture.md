@@ -384,6 +384,96 @@ format (devices are configured via a C++ `ModbusDeviceConfig`/
 `ModbusPointMapping` API only — wiring a config file into `apps/plc_runner`
 is future work), and Modbus RTU (serial) is a separate, not-yet-built driver.
 
+## Modbus RTU (serial) I/O driver (`io/modbus_rtu_*`, `net/serial_port`)
+
+`ModbusRtuIoDriver` is the serial counterpart to `ModbusTcpIoDriver`: same
+`IIoDriver` contract, same freeze-last-good-value/never-blocks-the-scan-
+thread semantics, same batching via the transport-agnostic
+`buildBatches()`/`decodeModbusPointValue()`/`encodeModbusPointValue()` (now
+shared by both drivers — see below). It reuses `nanoMODBUS`'s RTU transport
+mode rather than hand-rolling serial framing/CRC, exactly as the TCP driver
+reuses its TCP/MBAP mode.
+
+**Why one poller thread per bus, not per device.** `ModbusTcpIoDriver` gives
+each configured device its own socket and its own poller thread, since a TCP
+connection is inherently point-to-point. A serial line is different: RS-485
+(and even a point-to-point RS-232 link relayed through a single USB adapter)
+is a **shared, half-duplex medium** — every device on it sees every byte,
+and only one conversation can be in flight at a time. Two threads issuing
+requests on the same serial port concurrently would corrupt the bus. So the
+new config shape reflects that directly: `ModbusRtuBusConfig` is one
+physical port (`devicePath`, baud/parity/stop-bits `net::SerialConfig`) that
+owns a list of `ModbusRtuDeviceConfig`s (each just a `unitId` + its own
+points + its own health tag), and `ModbusRtuIoDriver` starts exactly **one**
+thread per bus, which polls every device on it sequentially each cycle
+(`pollInterval` applies to one full pass over the bus, not per device).
+
+**`ModbusRtuBus`** is the RTU analog of `ModbusClient`: one `net::SerialPort`
++ one nanoMODBUS client instance per bus, shared across every unit id
+configured on it. Each of its `readBatch`/`writeRegisters`/`writeCoils`
+methods takes the target `unitId` explicitly and calls
+`nmbs_set_destination_rtu_address()` before issuing the request — the
+mechanism that actually addresses one slave out of several sharing the same
+wire. `ModbusRtuIoDriver`'s single poll loop calls these once per device,
+per cycle, always from the same thread.
+
+**A real bug this surfaced and fixed**: `nmbs_set_destination_rtu_address()`
+turned out to control the outgoing unit-id byte for *both* transports —
+nanoMODBUS applies `nmbs->msg.unit_id = nmbs->dest_address_rtu` unconditionally
+in `nmbs_send()`, not just under `NMBS_TRANSPORT_RTU` (its name is a slight
+misnomer). The original TCP `ModbusClient::ensureConnected()` never called
+it, so a configured `ModbusDeviceConfig::unitId` was silently never sent —
+harmless against a plain Modbus TCP device (which ignores the byte), but
+wrong for a Modbus TCP-to-RTU gateway addressing a specific downstream RTU
+slave. Fixed by adding the missing call once the TCP client is created,
+alongside the read/byte timeouts.
+
+**`net::SerialPort`** (`net/serial_port.hpp`) mirrors `net::TcpSocket`
+deliberately closely: same `recvSome()`/`sendSome()` byte-count/timeout
+contract (so it plugs into nanoMODBUS's transport callbacks exactly like
+`TcpSocket` does), same movable-not-copyable/`adopt()`-for-tests shape.
+POSIX `open()` configures the port via `termios` (`cfmakeraw` for an 8-bit-
+clean line with no canonical-mode/echo/signal processing, explicit baud via
+`cfsetispeed`/`cfsetospeed` from a small fixed table of standard rates,
+data bits/parity/stop bits from `SerialConfig`) and uses `select()` +
+non-blocking I/O for per-call timeouts, since there's no serial equivalent
+of `SO_RCVTIMEO`. Windows uses `CreateFileA`/`DCB`/`COMMTIMEOUTS` — written
+to the same documented Win32 serial APIs `net::TcpSocket`'s Winsock path
+uses, but (like the rest of this project's Windows code) not exercised by
+this repository's Linux-only test suite.
+
+**Shared decode/encode/diagnostics, not duplicated.** Word-order-aware
+value encode/decode (`decodeModbusPointValue()`/`encodeModbusPointValue()`)
+and `ModbusDeviceDiagnostics` used to live inside `modbus_tcp_driver.cpp`/
+`.hpp`; both moved to `modbus_mapping.{hpp,cpp}` so the RTU driver reuses
+them verbatim instead of drifting out of sync with a second copy. The
+per-transport protocol-request logic (the `nmbs_read_*`/`nmbs_write_*`
+switch bodies in `ModbusClient`/`ModbusRtuBus`) was judged different enough
+in shape (extra `unitId` parameter, different connect/open step) to leave
+duplicated rather than force through a transport-abstraction interface —
+each file stays independently readable, and nanoMODBUS error translation
+(the one piece that really would drift if duplicated) is factored into a
+small shared internal header, `src/io/modbus_nmbs_error.hpp`.
+
+**Testing** uses a real pseudo-terminal (PTY) pair rather than a hand-rolled
+byte mock, the serial equivalent of the TCP driver's approach: `SerialPort`
+tests drive the PTY master fd directly against a `SerialPort` opened on the
+slave path; `tests/support/mock_modbus_rtu_server.{hpp,cpp}` runs
+nanoMODBUS's own server mode over the same PTY, configured with a fixed
+`address_rtu` — a request addressed to any other unit id on that server
+gets no response at all (real multi-drop-bus behavior), which is the
+concrete test proof that `ModbusRtuBus` really transmits the `unitId` it's
+given rather than a fixed/ignored value.
+
+**Known limitations, deliberately not fixed yet**: no config-file format
+(same gap as TCP — C++ struct construction only); a bus's single poller
+thread means a hung/slow device on that bus delays polling every other
+device sharing its port (inherent to a shared half-duplex medium, not
+fixable without violating the "never two threads on one serial port"
+constraint — configure one device per bus if independent polling cadence
+matters more than sharing a physical port); gap-tolerant batching (same
+documented, not-yet-implemented optimization as TCP).
+
 ## Real-time characteristics
 
 Out of the box, on a stock (non-PREEMPT_RT) Linux or Windows kernel, the scan
@@ -479,6 +569,17 @@ disconnect, connection rejection) at the transport layer. One honest gap:
 true connect-*timeout*-under-packet-loss isn't reliably reproducible in a
 hermetic sandbox, so those tests cover connection-refused and the timeout
 plumbing itself rather than literally induced packet loss.
+
+Modbus RTU tests (`tests/net/serial_port_test.cpp`, `tests/io/modbus_rtu_*`)
+follow the same real-protocol-not-a-mock philosophy over a real PTY pair
+(see "Modbus RTU (serial) I/O driver" above): `SerialPort` byte transfer and
+timeout behavior, `ModbusRtuBus` round-trips for every register type plus
+the mismatched-unit-id-times-out and genuine-Modbus-exception cases
+(mirroring `ModbusClient`'s TCP test suite), and `ModbusRtuIoDriver`
+end-to-end through a `TagStore` (poll-and-observe, drop-in `IIoDriver` via
+`ScanEngine`, device-offline freeze-last-good-value + health tag) — the same
+four scenarios `ModbusTcpIoDriver`'s tests cover, adapted to the bus/unit-id
+shape.
 
 `SOFTPLC_ENABLE_SANITIZERS` (CMake option) turns on AddressSanitizer/
 UndefinedBehaviorSanitizer for dev/CI builds.

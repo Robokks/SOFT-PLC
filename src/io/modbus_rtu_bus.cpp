@@ -1,4 +1,4 @@
-#include "softplc/io/modbus_client.hpp"
+#include "softplc/io/modbus_rtu_bus.hpp"
 
 #include <chrono>
 #include <cstring>
@@ -13,63 +13,62 @@ namespace softplc::io {
 namespace {
 
 std::int32_t transportRead(std::uint8_t* buf, std::uint16_t count, std::int32_t byteTimeoutMs, void* arg) {
-    auto* socket = static_cast<net::TcpSocket*>(arg);
+    auto* port = static_cast<net::SerialPort*>(arg);
     const auto timeout = std::chrono::milliseconds(byteTimeoutMs < 0 ? 60000 : byteTimeoutMs);
-    return socket->recvSome(std::span<std::byte>(reinterpret_cast<std::byte*>(buf), count), timeout);
+    return port->recvSome(std::span<std::byte>(reinterpret_cast<std::byte*>(buf), count), timeout);
 }
 
 std::int32_t transportWrite(const std::uint8_t* buf, std::uint16_t count, std::int32_t byteTimeoutMs,
                              void* arg) {
-    auto* socket = static_cast<net::TcpSocket*>(arg);
+    auto* port = static_cast<net::SerialPort*>(arg);
     const auto timeout = std::chrono::milliseconds(byteTimeoutMs < 0 ? 60000 : byteTimeoutMs);
-    return socket->sendSome(std::span<const std::byte>(reinterpret_cast<const std::byte*>(buf), count),
-                             timeout);
+    return port->sendSome(std::span<const std::byte>(reinterpret_cast<const std::byte*>(buf), count),
+                           timeout);
 }
 
 }  // namespace
 
-struct ModbusClient::Impl {
+struct ModbusRtuBus::Impl {
     nmbs_t nmbs{};
     bool created = false;
 };
 
-ModbusClient::ModbusClient(ModbusDeviceConfig config)
+ModbusRtuBus::ModbusRtuBus(ModbusRtuBusConfig config)
     : config_(std::move(config)), impl_(std::make_unique<Impl>()) {}
 
-ModbusClient::~ModbusClient() = default;
+ModbusRtuBus::~ModbusRtuBus() = default;
 
-bool ModbusClient::isConnected() const { return socket_.isOpen() && impl_->created; }
+bool ModbusRtuBus::isOpen() const { return port_.isOpen() && impl_->created; }
 
-void ModbusClient::disconnect() {
-    socket_.close();
+void ModbusRtuBus::close() {
+    port_.close();
     impl_->created = false;
 }
 
-RequestResult ModbusClient::ensureConnected() {
-    if (isConnected()) {
+RequestResult ModbusRtuBus::ensureOpen() {
+    if (isOpen()) {
         return RequestResult{};
     }
-    disconnect();
+    close();
 
-    const net::SocketError socketError =
-        socket_.connect(config_.host, config_.port, config_.connectTimeout);
-    if (socketError != net::SocketError::None) {
+    const net::SerialError openError = port_.open(config_.devicePath, config_.serial);
+    if (openError != net::SerialError::None) {
         RequestResult result;
         result.outcome = RequestOutcome::ConnectFailed;
-        result.detail = net::toString(socketError);
+        result.detail = net::toString(openError);
         return result;
     }
 
     nmbs_platform_conf conf;
     nmbs_platform_conf_create(&conf);
-    conf.transport = NMBS_TRANSPORT_TCP;
+    conf.transport = NMBS_TRANSPORT_RTU;
     conf.read = transportRead;
     conf.write = transportWrite;
-    conf.arg = &socket_;
+    conf.arg = &port_;
 
     const nmbs_error rc = nmbs_client_create(&impl_->nmbs, &conf);
     if (rc != NMBS_ERROR_NONE) {
-        socket_.close();
+        port_.close();
         RequestResult result;
         result.outcome = RequestOutcome::ConnectFailed;
         result.detail = nmbs_strerror(rc);
@@ -79,21 +78,17 @@ RequestResult ModbusClient::ensureConnected() {
     const auto timeoutMs = static_cast<std::int32_t>(config_.requestTimeout.count());
     nmbs_set_read_timeout(&impl_->nmbs, timeoutMs);
     nmbs_set_byte_timeout(&impl_->nmbs, timeoutMs);
-    // Populates the MBAP unit identifier byte on every outgoing request (nanoMODBUS
-    // applies this regardless of transport, not just NMBS_TRANSPORT_RTU -- see
-    // nmbs_send() in nanomodbus.c). Without this, config_.unitId was silently never
-    // sent, which only matters to a Modbus TCP-to-RTU gateway addressing a specific
-    // downstream RTU slave (a plain TCP device ignores the byte).
-    nmbs_set_destination_rtu_address(&impl_->nmbs, config_.unitId);
 
     impl_->created = true;
     return RequestResult{};
 }
 
-RequestResult ModbusClient::readBatch(const ReadBatch& batch, std::vector<std::uint16_t>& registersOut,
+RequestResult ModbusRtuBus::readBatch(std::uint8_t unitId, const ReadBatch& batch,
+                                       std::vector<std::uint16_t>& registersOut,
                                        std::vector<bool>& bitsOut) {
-    RequestResult connectResult = ensureConnected();
-    if (!connectResult.ok()) return connectResult;
+    RequestResult openResult = ensureOpen();
+    if (!openResult.ok()) return openResult;
+    nmbs_set_destination_rtu_address(&impl_->nmbs, unitId);
 
     nmbs_error rc = NMBS_ERROR_NONE;
     switch (batch.registerType) {
@@ -135,29 +130,32 @@ RequestResult ModbusClient::readBatch(const ReadBatch& batch, std::vector<std::u
 
     RequestResult result = translateModbusError(rc);
     if (!result.ok() && result.outcome != RequestOutcome::ModbusException) {
-        disconnect();
+        close();
     }
     return result;
 }
 
-RequestResult ModbusClient::writeRegisters(std::uint16_t address,
+RequestResult ModbusRtuBus::writeRegisters(std::uint8_t unitId, std::uint16_t address,
                                             const std::vector<std::uint16_t>& values) {
-    RequestResult connectResult = ensureConnected();
-    if (!connectResult.ok()) return connectResult;
+    RequestResult openResult = ensureOpen();
+    if (!openResult.ok()) return openResult;
+    nmbs_set_destination_rtu_address(&impl_->nmbs, unitId);
 
     const nmbs_error rc = nmbs_write_multiple_registers(
         &impl_->nmbs, address, static_cast<std::uint16_t>(values.size()), values.data());
 
     RequestResult result = translateModbusError(rc);
     if (!result.ok() && result.outcome != RequestOutcome::ModbusException) {
-        disconnect();
+        close();
     }
     return result;
 }
 
-RequestResult ModbusClient::writeCoils(std::uint16_t address, const std::vector<bool>& values) {
-    RequestResult connectResult = ensureConnected();
-    if (!connectResult.ok()) return connectResult;
+RequestResult ModbusRtuBus::writeCoils(std::uint8_t unitId, std::uint16_t address,
+                                        const std::vector<bool>& values) {
+    RequestResult openResult = ensureOpen();
+    if (!openResult.ok()) return openResult;
+    nmbs_set_destination_rtu_address(&impl_->nmbs, unitId);
 
     nmbs_bitfield bits{};
     nmbs_bitfield_reset(bits);
@@ -170,7 +168,7 @@ RequestResult ModbusClient::writeCoils(std::uint16_t address, const std::vector<
 
     RequestResult result = translateModbusError(rc);
     if (!result.ok() && result.outcome != RequestOutcome::ModbusException) {
-        disconnect();
+        close();
     }
     return result;
 }

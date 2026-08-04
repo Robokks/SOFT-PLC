@@ -5,10 +5,13 @@ add_library(softplc_core STATIC
     io/modbus_mapping.cpp
     io/modbus_client.cpp
     io/modbus_tcp_driver.cpp
+    io/modbus_rtu_bus.cpp
+    io/modbus_rtu_driver.cpp
     core/scan_engine.cpp
     core/rt_scheduling.cpp
     net/tcp_socket.cpp
     net/tcp_listener.cpp
+    net/serial_port.cpp
     st/lexer.cpp
     st/parser.cpp
     st/pou_binder.cpp

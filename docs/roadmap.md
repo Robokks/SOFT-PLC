@@ -10,9 +10,13 @@ Functions" in `docs/architecture.md`), a textual Ladder Diagram `RUNG`
 statement reusing the same grammar/interpreter (see "Ladder Diagram"), and
 the standard `TON`/`TOF`/`CTU`/`CTD` timer/counter FBs shipped as ST source
 (see "Standard library: TON/TOF/CTU/CTD") — opt-in real-time OS scheduling
-(priority/affinity/memory locking via `core/rt_scheduling`), and a Modbus
-TCP client (master) I/O driver (`io/modbus_tcp_driver.hpp`, built on the
-vendored `nanoMODBUS` codec). See `docs/architecture.md`.
+(priority/affinity/memory locking via `core/rt_scheduling`), and Modbus TCP
+and RTU (serial) client (master) I/O drivers (`io/modbus_tcp_driver.hpp`,
+`io/modbus_rtu_driver.hpp`, both built on the vendored `nanoMODBUS` codec —
+see "Modbus RTU (serial) I/O driver" in `docs/architecture.md` for how the
+two share their point-mapping/encode-decode/diagnostics layer while
+differing in threading model, since a serial bus is shared/half-duplex
+where a TCP connection is point-to-point). See `docs/architecture.md`.
 
 Explicitly out of scope for Phase 1's ST subset (parser will reject these):
 - `FOR` loops, `CASE` statements, `REPEAT` loops
@@ -48,19 +52,23 @@ Explicitly out of scope for Phase 1's ST subset (parser will reject these):
 - **Task / multi-POU scheduling**: an IEC "Task" concept binding one or more
   programs to independent scan rates/priorities, replacing `ScanEngine`'s
   current single-`IProgram` model.
-- **More real I/O drivers**: Modbus RTU (serial), GPIO (e.g. Raspberry Pi),
-  NI DAQmx, SPI/I2C — all implementing `IIoDriver` like `ModbusTcpIoDriver`,
+- **More real I/O drivers**: Modbus RTU shipped (`io/modbus_rtu_driver.hpp`,
+  `net/serial_port.hpp`); GPIO (e.g. Raspberry Pi), NI DAQmx, SPI/I2C still
+  open — all implementing `IIoDriver` like the existing Modbus drivers,
   requiring no `ScanEngine` changes. `net::TcpSocket`/`TcpListener` are
   already generic (not Modbus-specific) for reuse by future TCP-based
-  fieldbus work.
+  fieldbus work; `net::SerialPort` likewise for future serial-based work
+  (e.g. a non-Modbus SCADA protocol).
 - **Drive communication**: Profinet, EtherCAT — a larger undertaking than
   Modbus (real-time industrial Ethernet, not plain TCP), likely needing
   dedicated stacks rather than a hand-rolled protocol layer.
-- **Modbus TCP driver follow-ups**: gap-tolerant batching (a documented,
-  not-yet-implemented optimization — see `docs/architecture.md`), and a
-  config-file format for devices/points (today it's a C++
-  `ModbusDeviceConfig`/`ModbusPointMapping` API only, not wired into
-  `apps/plc_runner`).
+- **Modbus driver follow-ups** (TCP and RTU): gap-tolerant batching (a
+  documented, not-yet-implemented optimization — see `docs/architecture.md`),
+  and a config-file format for devices/points/buses (today it's a C++
+  `ModbusDeviceConfig`/`ModbusRtuBusConfig`/`ModbusPointMapping` API only,
+  not wired into `apps/plc_runner`). RTU-specific: the Windows
+  `net::SerialPort` path (`CreateFileA`/`DCB`/`COMMTIMEOUTS`) is written but
+  not exercised by this repository's Linux-only test suite.
 - **External tag access**: OPC-UA and/or Modbus server exposing `TagStore`
   to HMI/SCADA clients, exercising the `shared_mutex` concurrent-reader path
   the store was designed for. Once such a consumer exists, revisit
