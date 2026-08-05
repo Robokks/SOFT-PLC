@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <shared_mutex>
@@ -30,6 +31,11 @@ struct DownloadResult {
     std::size_t tagCount = 0;
 };
 
+struct ProjectSummary {
+    std::string name;
+    std::string updatedAt;  // ISO-8601 UTC, from the project file's filesystem mtime
+};
+
 // Hosts an HTTP API in front of a live PLC runtime, for a future browser-based GUI:
 // compiling/"downloading" a new ST source into a running target, and exposing the live
 // TagStore for an online tag monitor. See docs/architecture.md's "Programming/
@@ -52,8 +58,15 @@ public:
     // usage without a frontend built yet, or the test suite, which has no dist/ to
     // point at). Decided at construction time, not changeable afterwards -- there's no
     // use case yet for switching a running server's static directory.
+    // `projectsDir`, if non-empty, enables the project-storage endpoints (see "Project
+    // storage" in docs/architecture.md): each project is one opaque JSON file, saved
+    // and read back verbatim -- the schema (blocks/networks/DBs/IO linking/drive
+    // config) is entirely the frontend's concern, compiled client-side into ST source
+    // (see web/src/project/compile.ts). The one field PlcServer itself ever looks
+    // inside a project for is "compiledSource", read back by autoLoadActiveProject()
+    // below.
     PlcServer(io::IIoDriver& io, std::chrono::microseconds cycleTime,
-              std::string staticDir = {});
+              std::string staticDir = {}, std::string projectsDir = {});
     ~PlcServer();
 
     PlcServer(const PlcServer&) = delete;
@@ -99,12 +112,47 @@ public:
     [[nodiscard]] std::optional<core::ScanDiagnostics> diagnostics() const;
     [[nodiscard]] std::string programName() const;
 
+    // Project storage (no-ops / empty results if constructed with no projectsDir).
+    // `name` is validated against a strict allowlist (see isValidProjectName() in
+    // plc_server.cpp) before it ever reaches a filesystem path -- project names come
+    // from an HTTP path segment, so this is the load-bearing defense against path
+    // traversal (a name like "../../etc/passwd").
+    [[nodiscard]] std::vector<ProjectSummary> listProjects() const;
+    // The raw JSON text previously saved for `name`, or std::nullopt if it doesn't
+    // exist (or `name` is invalid).
+    [[nodiscard]] std::optional<std::string> getProject(const std::string& name) const;
+    // Writes `json` verbatim as that project's saved file. Returns false for an
+    // invalid name; does not otherwise inspect or validate `json`'s contents.
+    bool saveProject(const std::string& name, const std::string& json);
+    bool deleteProject(const std::string& name);
+    // The currently "active" project name (the one autoLoadActiveProject() below acts
+    // on at startup), or std::nullopt if none has been set or no project storage is
+    // configured.
+    [[nodiscard]] std::optional<std::string> activeProjectName() const;
+    // Marks `name` active; fails (false) if that project doesn't exist.
+    bool setActiveProject(const std::string& name);
+
+    struct AutoLoadResult {
+        bool attempted = false;  // true iff there was an active project with a
+                                  // non-empty compiledSource to try downloading
+        DownloadResult download;
+    };
+    // Reads the active project's saved "compiledSource" field (if any) and downloads
+    // it -- the "already-loaded program automatically starts" behavior. Intended to
+    // be called once, by apps/plc_server/main.cpp, before entering the listen loop;
+    // not called automatically by the constructor so construction stays side-effect-
+    // free (matching how an initial program path is handled explicitly by main.cpp,
+    // not by PlcServer itself).
+    AutoLoadResult autoLoadActiveProject();
+
 private:
     void registerRoutes();
+    [[nodiscard]] std::filesystem::path projectFilePath(const std::string& name) const;
 
     io::IIoDriver& io_;
     std::chrono::microseconds cycleTime_;
     std::string staticDir_;
+    std::string projectsDir_;
 
     mutable std::shared_mutex stateMutex_;  // guards every field below
     std::unique_ptr<tags::TagStore> tags_;

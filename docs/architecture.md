@@ -23,6 +23,7 @@ src/                        (matching .cpp files)
 apps/plc_runner/            main.cpp — loads an .st file and runs the engine
 apps/plc_server/            main.cpp — hosts PlcServer's HTTP API, program optional
 web/                        React + TypeScript frontend talking to PlcServer's API
+  src/project/              Project schema, ST compiler, project picker/editor UI
 examples/blink/             a minimal ST program toggling a direct-addressed output
 tests/                      GoogleTest unit tests, mirroring src/, plus
                              tests/support/mock_modbus_server.{hpp,cpp}
@@ -569,6 +570,19 @@ isn't earning its keep. Revisit this once an endpoint needs to parse genuinely
 structured/nested JSON input (e.g. a future graphical-ladder-editor payload, which
 is expected to need real nesting a one-field extractor can't handle).
 
+**Project storage** (`GET /api/projects`, `GET`/`PUT`/`DELETE /api/projects/<name>`,
+`POST /api/projects/<name>/activate`, `GET /api/projects/active`) treats a project as
+an opaque JSON blob -- `PlcServer` never parses the block/network/DB/IO-linking
+schema the frontend edits (see "Project model and compiler" below), only reading back
+one conventional field, `"compiledSource"`, to auto-load the active project on
+startup (`PlcServer::autoLoadActiveProject()`, called by `apps/plc_server/main.cpp`
+before entering the listen loop when `--projects-dir` is set -- "already-loaded
+program automatically starts," matching how a real PLC target keeps running whatever
+it had when it lost power). A project name comes straight from an HTTP path segment,
+so it's checked against a strict allowlist (`isValidProjectName()`: letters, digits,
+`_`, `-` only) before it ever reaches a filesystem path -- the actual defense against
+path traversal (a name of `../../etc/passwd`), not merely blocklisting `..`.
+
 **Testing** (`tests/server/plc_server_test.cpp`) follows this project's established
 real-server-not-a-mock approach (mirroring the Modbus mock-server tests): a real
 `PlcServer` bound to an OS-assigned ephemeral port (`bindEphemeralPort()`/
@@ -579,22 +593,23 @@ prior program running untouched, `/api/tags` reflecting live scan-driven updates
 at least one real SSE frame received over `/api/tags/stream`.
 
 **Known limitations, deliberately not fixed yet**: no authentication/TLS (v1 assumes a
-trusted local network, like Modbus); no static-file serving for a frontend bundle yet
-(deferred until a GUI frontend actually exists to serve); download always takes the
-raw-ST-source path -- a future graphical ladder editor is expected to either emit the
-same textual grammar or a JSON IR compiled server-side directly into
-`CallStmt`/`RungStmt` AST nodes (see "Ladder Diagram" above), neither of which exists
-yet; the tag-write endpoint takes one value at a time (no batch/multi-tag write).
+trusted local network, like Modbus); download always takes the raw-ST-source path --
+today that source is generated client-side by `web/src/project/compile.ts` (see
+"Project model and compiler" below) rather than the backend understanding a project's
+block/network structure directly; the tag-write endpoint takes one value at a time
+(no batch/multi-tag write).
 
 ## Web frontend (`web/`)
 
-A minimal React + TypeScript (Vite) single-page app talking to `PlcServer`'s HTTP API:
-a status bar, a live tag table (subscribed to `/api/tags/stream`, falling back to
-polling `/api/tags` whenever the SSE connection isn't live -- e.g. the initial
-connection, or the momentary gap while a download restarts the engine), a per-tag
-force control (`POST /api/tags/<name>`), and a raw-ST-source textarea + Download
-button (`POST /api/program`) that surfaces a compile error inline rather than
-navigating away or throwing an unhandled exception.
+A React + TypeScript (Vite) single-page app talking to `PlcServer`'s HTTP API. Two
+top-level views: `ProjectPicker` (list/create/open a project -- see "Project model and
+compiler" below) and `ProjectView` (everything "under" an open project: Programming,
+Data Blocks, IO Linking, Drive Configuration tabs, plus a live tag monitor). The
+monitor -- a status bar and a tag table subscribed to `/api/tags/stream`, falling back
+to polling `/api/tags` whenever the SSE connection isn't live -- watches whatever
+`PlcServer` actually has running, which may not be the project currently open for
+editing, exactly like a real engineering tool's online view is independent of what's
+loaded in the editor.
 
 **Why Vite + React + TypeScript.** Vite gives a fast dev server with an out-of-the-box
 dev proxy (`vite.config.ts` forwards `/api` to the backend, so the app can always call
@@ -602,30 +617,34 @@ same-origin paths whether it's running under `vite dev` or served by `PlcServer`
 itself in production) and a single `npm run build` producing static output with no
 separate bundler configuration to maintain. React + TypeScript is this project's one
 concession to an ecosystem dependency on the frontend side (unlike the C++ core's
-zero-runtime-dependency posture) because a graphical Ladder editor (still open, see
-`docs/roadmap.md`) needs real interactive UI state management that plain DOM
-manipulation would make far harder to keep correct as it grows.
+zero-runtime-dependency posture) because a structured block/network editor (and,
+eventually, a true graphical Ladder renderer -- still open, see `docs/roadmap.md`)
+needs real interactive UI state management that plain DOM manipulation would make far
+harder to keep correct as it grows.
 
 **PlcServer serves the built frontend directly.** `PlcServer`'s constructor takes an
 optional `staticDir`; when set, it's mounted at `/` (cpp-httplib's
 `set_mount_point()`) instead of the plain-text banner `PlcServer` otherwise serves
-there, so `apps/plc_server --static-dir=web/dist ...` makes a single running process
-serve both the compiled `web/dist` bundle and the JSON API a browser pointed at it
-talks to -- the actual "full loop" (editor + download + live monitor) the GUI phase
-targets, verified by hand end-to-end: download a program, watch tags update live over
-the SSE stream (including a `BOOL` tag genuinely flipping), force a tag, and confirm
-an invalid download is rejected with the real parser error while the prior program
-keeps scanning untouched.
+there, so `apps/plc_server --static-dir=web/dist --projects-dir=... ...` makes a
+single running process serve the compiled `web/dist` bundle, the JSON API, and project
+persistence -- the actual "full loop" (create a project, program it, compile &
+download, watch it run live, force a tag) verified by hand end-to-end, including a
+full process restart auto-reloading the last-active project.
 
 **Testing**: Vitest + React Testing Library, following the same principle as the C++
-side's real-server-not-a-mock tests where practical -- `api.ts`'s functions are
-exercised against a stubbed `fetch` (there's no browser-side way to spin up a "real"
-HTTP server the way `httplib::Client` does against a real `PlcServer`, so stubbing
-`fetch` is this side's equivalent boundary), and `ProgramEditor`/`TagTable` are
-rendered and interacted with via Testing Library rather than snapshot-tested.
-`tests/server/plc_server_test.cpp` gained a companion C++ test
-(`PlcServerStaticDirTest`) proving a configured static directory is served at `/`
-without shadowing the `/api/*` routes registered alongside it.
+side's real-server-not-a-mock tests where practical -- `api.ts`/`project/api.ts`'s
+functions are exercised against a stubbed `fetch` (there's no browser-side way to spin
+up a "real" HTTP server the way `httplib::Client` does against a real `PlcServer`, so
+stubbing `fetch` is this side's equivalent boundary), and components are rendered and
+interacted with via Testing Library rather than snapshot-tested --
+`BlockTree.test.tsx` in particular drives a Cyclic Interrupt block into existence
+through simulated clicks/typing alone and then feeds the result through the real
+`compileProject()`, the same "build it through the real UI path, verify the real
+output" spirit as the C++ side's `PouBinderTest`. `tests/server/plc_server_test.cpp`
+gained a companion C++ test (`PlcServerStaticDirTest`) proving a configured static
+directory is served at `/` without shadowing the `/api/*` routes registered alongside
+it, and `PlcServerProjectsFixture` covers project storage end-to-end (save/list/
+delete/activate/auto-load) against a real ephemeral-port server.
 
 **Known limitations, deliberately not fixed yet**: no build step wires `web/`'s
 `npm run build` into the CMake build (the two are independent for now -- build the
@@ -633,9 +652,81 @@ frontend with `npm`, point `--static-dir` at its `dist/`, same as this project's
 optional-integration boundaries); a tag's force input doesn't resync with a live value
 arriving from the stream while the user is actively editing it (a deliberate
 simplification, not a bug -- syncing only while unfocused is the natural fix, not yet
-done); no graphical Ladder editor or IL/STL source mode yet (`ProgramEditor` is a
-plain textarea, ST-source-only) -- both are real, not-yet-made design decisions
-tracked in `docs/roadmap.md`.
+done).
+
+## Project model and compiler (`web/src/project/`)
+
+The actual TIA-Portal-shaped authoring model this GUI phase was asked for: a Project
+groups IO linking, drive configuration, Data Blocks, and Programming (a tree of
+blocks, each a list of Ladder-style networks) -- see `web/src/project/types.ts` for
+the full shape. `compileProject()` (`web/src/project/compile.ts`) turns a `Project`
+into ST source text that `st::StProgram::load()` parses completely unchanged: every
+construct it emits (`DATA_BLOCK`, `FUNCTION_BLOCK`/`FUNCTION`, instance declarations,
+`RUNG`, `CallStmt`) already exists in the backend grammar, so **this entire feature
+required zero backend/interpreter changes** beyond the generic project-storage
+endpoints described above. Verified against the real parser by hand with a
+multi-block project (a `DATA_BLOCK`, an FC, an FB instantiated and called from Main, a
+Cyclic Interrupt block, IO-linked tags) that compiled, downloaded, and ran correctly
+first try.
+
+**Blocks and networks.** `BlockDef.kind` is `Main` (exactly one, the top-level
+`PROGRAM`), `CyclicInterrupt`, `FunctionBlock`, or `Function`. A `NetworkDef` is one
+Ladder rung: an optional title/comment, a row of FB/FC "boxes" (`CallDef`s, compiled to
+plain `CallStmt`s immediately before the rung -- see "FB/FC boxes on a rung" above),
+a boolean condition (free-text, using the same series/parallel/NOT contact grammar
+`RUNG` already reuses, e.g. `(Start OR Motor) AND NOT Stop`), and one or more
+Direct/Set/Reset coils. `BlockTree`/`BlockEditor`/`NetworkList` (`web/src/project/`)
+edit this structure directly; adding a block is a button ("+ Cyclic Interrupt" / "+
+Function Block" / "+ Function") rather than a right-click context menu -- same
+functional outcome as originally asked for, simpler to build and test. Each var
+section (`VarDeclList`) and the instance list (`InstanceList`) are shared components
+reused across every block kind, `DATA_BLOCK` members, and the IO-linking list, so
+there's exactly one editable-table implementation rather than one per use.
+
+**Grammar constraints the compiler enforces even though the UI doesn't fully.** A
+top-level `PROGRAM`'s grammar (`Parser::parseProgram()`) has no `VAR_TEMP` keyword at
+all, unlike a `FUNCTION_BLOCK`/`FUNCTION` POU -- `compileProject()` never emits one for
+Main regardless of what a hand-edited/imported project's JSON contains (`BlockEditor`
+also simply never offers the field for `Main`/`CyclicInterrupt`, but the compiler's own
+guard is the one that actually matters for correctness).
+
+**Cyclic Interrupt: inline accumulate-and-fire, not a real separate task, in v1 --
+a deliberate, discussed trade-off.** A real PLC's cyclic-interrupt OB runs on its own
+schedule, genuinely independent of the main scan. Building that properly means a
+second scheduled loop with its own thread (the "Task scheduling" item already flagged
+as future work in `docs/roadmap.md`) -- real design work, not a small addition.
+v1 instead compiles a Cyclic Interrupt block **inline into Main**, guarded by a
+hidden `TIME` accumulator that behaves exactly like `TON`'s own `ET` (see "Standard
+library: TON/TOF/CTU/CTD" above): it adds `System.CycleTime` each scan, and once it
+reaches the configured interval, runs the block's networks once and resets to zero.
+This was chosen specifically so the feature ships now, using a pattern (accumulate
+against `System.CycleTime`) this codebase already established for exactly this kind of
+timing, rather than blocking the whole project-model feature on a multi-task runtime
+redesign. **Known limitation this trade-off creates**: the interrupt block's own
+`vars`/`instances` are folded into Main's flat `VAR` scope (`emitMainVarSections()` in
+compile.ts), not a separate scope, so its variable names must not collide with Main's
+-- and its timing is quantized to the main scan rate, not truly independent. Revisit
+once a real multi-task scheduler exists.
+
+**Drive configuration is form-editable but not yet live.** `DriveConfigSection` edits
+`Project.driveConfig` (Modbus TCP/RTU device/point config, mirroring
+`io::ModbusDeviceConfig`/`ModbusPointMapping` in the C++ backend) and it's saved with
+the project, but `apps/plc_server` still always constructs a `SimulatedIoDriver` --
+this configuration doesn't yet get turned into a real `ModbusTcpIoDriver`/
+`ModbusRtuIoDriver` at download time. Tracked in `docs/roadmap.md`, not silently
+dropped: wiring it up needs `PlcServer` (or `apps/plc_server`) to own constructing the
+right `IIoDriver` from this config instead of a fixed `SimulatedIoDriver`.
+
+**Networks can't compute values, only boolean logic + FB/FC calls -- a real, known
+modeling gap, not yet fixed.** A `NetworkDef` is deliberately Ladder-shaped (condition
++ coils + calls), matching a real 2-D rung, but that means there's no way to express a
+plain computed assignment (e.g. `Out1 := In1 * 2;`) through the network editor today
+-- only through an FB/FC's own internal logic, which itself is built from the same
+network shape. Real Ladder handles this with dedicated MOVE/CALC/arithmetic boxes;
+none are modeled yet. A `Function`/`FunctionBlock` that genuinely needs to compute a
+value currently has no way to do so purely through this editor -- discovered while
+hand-verifying the compiler (an `FC_Double` test POU never actually doubled anything,
+for exactly this reason), documented here rather than silently left unremarked.
 
 ## Real-time characteristics
 

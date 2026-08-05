@@ -42,6 +42,7 @@ int main(int argc, char** argv) {
     int port = 8080;
     int cycleMs = 10;
     std::string staticDir;
+    std::string projectsDir;
     std::string initialProgramPath;
 
     for (int i = 1; i < argc; ++i) {
@@ -54,13 +55,16 @@ int main(int argc, char** argv) {
             cycleMs = std::stoi(arg.substr(16));
         } else if (arg.rfind("--static-dir=", 0) == 0) {
             staticDir = arg.substr(13);
+        } else if (arg.rfind("--projects-dir=", 0) == 0) {
+            projectsDir = arg.substr(15);
         } else if (initialProgramPath.empty()) {
             initialProgramPath = arg;
         }
     }
 
     softplc::io::SimulatedIoDriver io;
-    softplc::server::PlcServer server(io, std::chrono::milliseconds(cycleMs), staticDir);
+    softplc::server::PlcServer server(io, std::chrono::milliseconds(cycleMs), staticDir,
+                                       projectsDir);
 
     if (!initialProgramPath.empty()) {
         const auto result = server.download(readFile(initialProgramPath));
@@ -71,12 +75,31 @@ int main(int argc, char** argv) {
         }
         std::cout << "loaded program '" << result.programName << "' (" << result.tagCount
                   << " tags)\n";
+    } else if (!projectsDir.empty()) {
+        // "Already-loaded program automatically starts": if a project was left active
+        // from a previous run, download its last-compiled source now, before we start
+        // listening -- matching how a real PLC target keeps running whatever program
+        // it had when it lost power.
+        const auto result = server.autoLoadActiveProject();
+        if (result.attempted) {
+            if (result.download.ok) {
+                std::cout << "auto-loaded active project's program '"
+                          << result.download.programName << "' (" << result.download.tagCount
+                          << " tags)\n";
+            } else {
+                std::cerr << "warning: active project's saved program failed to load: "
+                          << result.download.error << '\n';
+            }
+        }
     }
 
     std::signal(SIGINT, handleSigint);
 
     if (!staticDir.empty()) {
         std::cout << "serving web frontend from '" << staticDir << "'\n";
+    }
+    if (!projectsDir.empty()) {
+        std::cout << "project storage: '" << projectsDir << "'\n";
     }
     std::cout << "listening on http://" << host << ":" << port << " (Ctrl+C to stop)...\n";
     bool bindFailed = false;

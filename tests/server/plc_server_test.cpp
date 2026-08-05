@@ -4,6 +4,7 @@
 #include <httplib.h>
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <thread>
@@ -185,6 +186,146 @@ TEST_F(PlcServerFixture, WriteEndpointRejectsUnknownTagAndTypeMismatch) {
         ASSERT_TRUE(res);
         EXPECT_EQ(res->status, 400);
     }
+}
+
+// Wraps a PlcServer constructed with a real (temp-directory) projectsDir, so the
+// project-storage endpoints are actually enabled -- PlcServerFixture above always
+// constructs with no projectsDir (feature disabled), which is its own tested case.
+class PlcServerProjectsFixture : public ::testing::Test {
+protected:
+    void SetUp() override {
+        dir_ = std::filesystem::temp_directory_path() /
+               ("softplc_plc_server_projects_test_" +
+                std::to_string(reinterpret_cast<std::uintptr_t>(this)));
+        std::filesystem::create_directories(dir_);
+        server_ = std::make_unique<server::PlcServer>(io_, std::chrono::milliseconds(5),
+                                                        /*staticDir=*/std::string{}, dir_.string());
+        port_ = server_->bindEphemeralPort("127.0.0.1");
+        ASSERT_GT(port_, 0);
+        listener_ = std::thread([this] { server_->listenAfterBind(); });
+        client_ = std::make_unique<httplib::Client>("127.0.0.1", port_);
+        client_->set_connection_timeout(2);
+        client_->set_read_timeout(2);
+    }
+
+    void TearDown() override {
+        server_->stop();
+        listener_.join();
+        std::filesystem::remove_all(dir_);
+    }
+
+    io::SimulatedIoDriver io_;
+    std::filesystem::path dir_;
+    std::unique_ptr<server::PlcServer> server_;
+    std::unique_ptr<httplib::Client> client_;
+    std::thread listener_;
+    int port_ = 0;
+};
+
+TEST_F(PlcServerProjectsFixture, SaveGetListAndDeleteRoundTrip) {
+    {
+        const auto res = client_->Get("/api/projects");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->body, "[]");
+    }
+
+    const std::string body = R"({"name":"Proj1","blocks":[]})";
+    {
+        const auto res = client_->Put("/api/projects/Proj1", body, "application/json");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 200);
+    }
+    {
+        const auto res = client_->Get("/api/projects/Proj1");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 200);
+        EXPECT_EQ(res->body, body);
+    }
+    {
+        const auto res = client_->Get("/api/projects");
+        ASSERT_TRUE(res);
+        EXPECT_NE(res->body.find("\"name\":\"Proj1\""), std::string::npos);
+    }
+
+    const std::string updatedBody = R"({"name":"Proj1","blocks":["Main"]})";
+    ASSERT_TRUE(client_->Put("/api/projects/Proj1", updatedBody, "application/json"));
+    {
+        const auto res = client_->Get("/api/projects/Proj1");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->body, updatedBody);
+    }
+
+    {
+        const auto res = client_->Delete("/api/projects/Proj1");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 200);
+    }
+    {
+        const auto res = client_->Get("/api/projects/Proj1");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 404);
+    }
+}
+
+TEST_F(PlcServerProjectsFixture, GetUnknownProjectIs404) {
+    const auto res = client_->Get("/api/projects/NoSuchProject");
+    ASSERT_TRUE(res);
+    EXPECT_EQ(res->status, 404);
+}
+
+TEST_F(PlcServerProjectsFixture, RejectsInvalidProjectNameWithoutTouchingFilesystem) {
+    // "." isn't in the allowlist (letters/digits/underscore/hyphen only), so this must
+    // be rejected before any filesystem access -- the concrete proof that isValidProjectName()
+    // actually gates every write path, not just the happy path.
+    const auto res = client_->Put("/api/projects/..", "{}", "application/json");
+    ASSERT_TRUE(res);
+    EXPECT_EQ(res->status, 400);
+    EXPECT_EQ(std::filesystem::exists(dir_ / "..json"), false);
+}
+
+TEST_F(PlcServerProjectsFixture, ActivateTracksTheActiveProjectByName) {
+    {
+        const auto res = client_->Get("/api/projects/active");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->body, "{\"name\":null}");
+    }
+
+    ASSERT_TRUE(client_->Put("/api/projects/Proj1", "{}", "application/json"));
+
+    {
+        // Activating a project that doesn't exist yet must fail.
+        const auto res = client_->Post("/api/projects/NoSuchProject/activate", "", "text/plain");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 404);
+    }
+
+    {
+        const auto res = client_->Post("/api/projects/Proj1/activate", "", "text/plain");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 200);
+    }
+    {
+        const auto res = client_->Get("/api/projects/active");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->body, "{\"name\":\"Proj1\"}");
+    }
+}
+
+TEST_F(PlcServerProjectsFixture, AutoLoadActiveProjectDownloadsItsSavedCompiledSource) {
+    // No active project yet -- nothing to do, and definitely no attempt.
+    EXPECT_FALSE(server_->autoLoadActiveProject().attempted);
+
+    const std::string project = R"({"name":"Proj1","compiledSource":")"
+                                 R"(PROGRAM Test VAR Counter : DINT := 0; END_VAR )"
+                                 R"(Counter := Counter + 1; END_PROGRAM"})";
+    ASSERT_TRUE(client_->Put("/api/projects/Proj1", project, "application/json"));
+    ASSERT_TRUE(client_->Post("/api/projects/Proj1/activate", "", "text/plain"));
+
+    const auto result = server_->autoLoadActiveProject();
+    EXPECT_TRUE(result.attempted);
+    EXPECT_TRUE(result.download.ok) << result.download.error;
+    EXPECT_EQ(result.download.programName, "Test");
+    EXPECT_TRUE(server_->isRunning());
 }
 
 // Standalone (not PlcServerFixture, which always constructs a PlcServer with no

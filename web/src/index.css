@@ -26,10 +26,35 @@ body {
   margin: 0;
 }
 
-.app {
-  max-width: 960px;
+.project-picker,
+.project-view {
+  max-width: 1100px;
   margin: 0 auto;
   padding: 16px 24px 48px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin: 6px 0 10px;
+}
+
+table th,
+table td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+table input,
+table select {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+button {
+  cursor: pointer;
 }
 
 h1 {
@@ -105,30 +130,227 @@ section {
   font-size: 12px;
 }
 
-.program-editor textarea {
-  width: 100%;
-  box-sizing: border-box;
-  font-family: ui-monospace, Consolas, monospace;
-  font-size: 13px;
+/* Project picker */
+
+.project-picker__list {
+  list-style: none;
+  padding: 0;
 }
 
-.program-editor__actions {
+.project-picker__list li {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-top: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
 }
 
-.program-editor__result {
+.project-picker__active {
   color: #2f9e44;
+  font-size: 12px;
+  font-weight: 700;
 }
 
-.program-editor__error {
+.project-picker__updated {
+  margin-left: auto;
+  opacity: 0.6;
+  font-size: 12px;
+}
+
+.project-picker__create {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.project-picker__error,
+.project-view__error {
   margin-top: 8px;
   padding: 8px;
   border: 1px solid var(--danger);
   border-radius: 4px;
   color: var(--danger);
   white-space: pre-wrap;
+  font-size: 13px;
+}
+
+.project-view__message {
+  color: #2f9e44;
+}
+
+/* Project view shell */
+
+.project-view__header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.project-view__header h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.project-view__tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.project-view__tabs button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.project-view__actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+.project-view__body {
+  margin-top: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+/* Block tree / network editor */
+
+.block-tree {
+  display: flex;
+  gap: 16px;
+}
+
+.block-tree__list {
+  min-width: 180px;
+}
+
+.block-tree__list ul {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px;
+}
+
+.block-tree__list li {
+  display: flex;
+  align-items: center;
+}
+
+.block-tree__list li button:first-child {
+  flex: 1;
+  text-align: left;
+}
+
+.block-tree__kind {
+  opacity: 0.6;
+  font-size: 11px;
+}
+
+.block-tree__add {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.block-tree__editor {
+  flex: 1;
+  min-width: 0;
+}
+
+.block-editor__header {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.block-editor__header label {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 2px;
+}
+
+.block-editor__kind {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 11px;
+}
+
+.var-decl-list,
+.instance-list {
+  margin-bottom: 12px;
+}
+
+.var-decl-list__label,
+.instance-list__label {
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.8;
+}
+
+.network-editor {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 10px;
+}
+
+.network-editor__header {
+  display: flex;
+  gap: 8px;
+}
+
+.network-editor__header input {
+  flex: 1;
+}
+
+.call-editor {
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  padding: 8px;
+  margin: 8px 0;
+}
+
+.network-editor__condition {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  margin: 8px 0;
+}
+
+/* Data blocks / IO linking / drive config */
+
+.data-blocks-section__block,
+.drive-config-section__device {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 12px;
+}
+
+.data-blocks-section__header,
+.drive-config-section__header {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.data-blocks-section__header label,
+.drive-config-section__header label {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 2px;
+}
+
+.io-linking-section__hint,
+.drive-config-section__hint {
+  opacity: 0.7;
   font-size: 13px;
 }

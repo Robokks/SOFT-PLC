@@ -1,78 +1,35 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type { StatusInfo, TagInfo } from './types'
-import { fetchStatus, fetchTags, subscribeTagStream } from './api'
-import { StatusBar } from './components/StatusBar'
-import { TagTable } from './components/TagTable'
-import { ProgramEditor } from './components/ProgramEditor'
-
-const kStatusPollMs = 1000
-const kTagPollFallbackMs = 1000
+import { useEffect, useState } from 'react'
+import { ProjectPicker } from './project/ProjectPicker'
+import { ProjectView } from './project/ProjectView'
+import { getActiveProjectName, getProject } from './project/api'
+import type { Project } from './project/types'
 
 function App() {
-  const [status, setStatus] = useState<StatusInfo | null>(null)
-  const [tags, setTags] = useState<TagInfo[]>([])
-  // True once the SSE stream has delivered at least one frame -- while it's live we
-  // skip the tag poll fallback below entirely, rather than running both at once.
-  const streamLiveRef = useRef(false)
+  const [project, setProject] = useState<Project | null>(null)
+  // Distinguishes "haven't checked yet" from "checked, nothing active" so the
+  // picker doesn't flash empty before the auto-open attempt below resolves.
+  const [checkedActive, setCheckedActive] = useState(false)
 
-  const refreshTagsOnce = useCallback(() => {
-    fetchTags()
-      .then(setTags)
-      .catch(() => {
-        // A download briefly restarts the engine; a poll landing in that window just
-        // fails silently and tries again next tick rather than surfacing a flash of
-        // error UI for an expected, momentary condition.
-      })
+  // Mirrors apps/plc_server's own "already-loaded program automatically starts"
+  // behavior at the UI level: open whichever project was last active, instead of
+  // always landing on the picker.
+  useEffect(() => {
+    getActiveProjectName()
+      .then((name) => (name ? getProject(name) : null))
+      .then(setProject)
+      .catch(() => setProject(null))
+      .finally(() => setCheckedActive(true))
   }, [])
 
-  useEffect(() => {
-    const poll = () => {
-      fetchStatus()
-        .then(setStatus)
-        .catch(() => setStatus(null))
-    }
-    poll()
-    const id = setInterval(poll, kStatusPollMs)
-    return () => clearInterval(id)
-  }, [])
+  if (!checkedActive) {
+    return null
+  }
 
-  // Live tag stream, with a plain poll as a fallback for whenever SSE isn't flowing
-  // (initial connection, or the momentary gap while a download restarts the engine).
-  useEffect(() => {
-    const unsubscribe = subscribeTagStream(
-      (nextTags) => {
-        streamLiveRef.current = true
-        setTags(nextTags)
-      },
-      () => {
-        streamLiveRef.current = false
-      },
-    )
-    const fallback = setInterval(() => {
-      if (!streamLiveRef.current) {
-        refreshTagsOnce()
-      }
-    }, kTagPollFallbackMs)
-    return () => {
-      unsubscribe()
-      clearInterval(fallback)
-    }
-  }, [refreshTagsOnce])
+  if (!project) {
+    return <ProjectPicker onOpen={setProject} />
+  }
 
-  return (
-    <div className="app">
-      <h1>SOFT-PLC</h1>
-      <StatusBar status={status} />
-      <section>
-        <h2>Program</h2>
-        <ProgramEditor onDownloaded={refreshTagsOnce} />
-      </section>
-      <section>
-        <h2>Live tags</h2>
-        <TagTable tags={tags} />
-      </section>
-    </div>
-  )
+  return <ProjectView project={project} onChange={setProject} onClose={() => setProject(null)} />
 }
 
 export default App

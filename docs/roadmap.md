@@ -51,7 +51,10 @@ Explicitly out of scope for Phase 1's ST subset (parser will reject these):
   IEC 61131-3 editions, so prioritize it below LD/FBD.
 - **Task / multi-POU scheduling**: an IEC "Task" concept binding one or more
   programs to independent scan rates/priorities, replacing `ScanEngine`'s
-  current single-`IProgram` model.
+  current single-`IProgram` model. The GUI's Cyclic Interrupt block (see
+  "HMI/Web UI" above) wants exactly this -- v1 approximates it by inlining the
+  block into Main with an accumulate-and-fire guard instead of a real independent
+  timer/thread, a deliberate stopgap documented in `docs/architecture.md`.
 - **More real I/O drivers**: Modbus RTU shipped (`io/modbus_rtu_driver.hpp`,
   `net/serial_port.hpp`); GPIO (e.g. Raspberry Pi), NI DAQmx, SPI/I2C still
   open — all implementing `IIoDriver` like the existing Modbus drivers,
@@ -98,28 +101,50 @@ Explicitly out of scope for Phase 1's ST subset (parser will reject these):
   numbered/byte-offset addressing, multi-file compilation units.
 - **Persistence**: retentive (`VAR RETAIN`) variables surviving a restart.
 - **HMI/Web UI — graphical programming interface**: a browser-based, TIA-Portal-style
-  front end (program editor, "download" to a running target, live online monitor).
-  Decided direction: a web app talking to the backend HTTP API, a true graphical
-  (2-D grid) Ladder Diagram editor rather than a textual stand-in, real Instruction
-  List (IL/STL) language support (not just ST), with v1 targeting the full loop
-  (editor + download + live monitor). Landed so far: the backend half —
-  `server/plc_server.hpp`/`apps/plc_server` (see "Programming/monitoring HTTP server"
-  in `docs/architecture.md`) — compile/download, a live tag monitor (JSON snapshot +
-  SSE stream), and a tag write/"force" endpoint, all over HTTP. A minimal web
-  frontend has also landed (`web/` — Vite + React + TypeScript, see "Web frontend" in
-  `docs/architecture.md`): status bar, live tag table with per-tag force, and a raw
-  ST-source textarea + Download button, with `PlcServer` able to serve the built
-  bundle directly (`--static-dir`) — the full editor+download+live-monitor loop works
-  end-to-end today, verified by hand, for plain ST source. Still open, in roughly
-  dependency order: a real graphical Ladder editor that serializes to/from
-  `RungStmt`/`CallStmt` (either via the existing textual `RUNG` grammar or a JSON IR
-  compiled server-side directly into those AST nodes — see "FB/FC boxes on a rung" in
-  `docs/architecture.md`) in place of today's plain textarea; a genuine IL/STL front
-  end compiling its accumulator+jump model down into the existing `Expr`/`Stmt` tree
-  (`ast.hpp` has no label/goto construct today, so this needs either a restricted
-  structured-jump subset or a new jump-capable execution primitive — a real design
-  decision, not yet made); and wiring `web/`'s `npm run build` into the CMake build
-  (the two build systems are independent for now). A real graphical Ladder *editor UI*
-  (drag-and-drop rungs, etc.) is inherently a large, multi-session undertaking —
-  expect it to land incrementally, each slice with its own tests, rather than as one
-  change.
+  front end. Decided direction: a web app talking to the backend HTTP API, a true
+  graphical (2-D grid) Ladder Diagram editor rather than a textual stand-in
+  eventually, real Instruction List (IL/STL) language support (not just ST)
+  eventually, with v1 targeting the full loop (project → IO linking/drive config/DB
+  creation/programming → compile & download → live online monitor).
+
+  **Landed**: the backend — `server/plc_server.hpp`/`apps/plc_server` (see
+  "Programming/monitoring HTTP server" in `docs/architecture.md`) — compile/download,
+  a live tag monitor (JSON snapshot + SSE stream), a tag write/"force" endpoint, and
+  generic project storage (list/save/load/delete/activate, opaque JSON, auto-loads
+  the active project's saved program on startup). A full project-authoring frontend
+  (`web/src/project/`, see "Project model and compiler" in `docs/architecture.md`):
+  create/open projects; a Programming section with a block tree (Main, Cyclic
+  Interrupt, Function Block, Function) and a structured per-network editor (condition
+  + coils + FB/FC calls); Data Block creation; IO linking; Modbus drive configuration
+  (form-only, see below); and a client-side compiler turning all of that into ST
+  source the existing backend parses completely unchanged — this landed with **zero
+  backend/interpreter changes**. Verified end-to-end by hand repeatedly, including a
+  full process restart auto-reloading and auto-running the last-active project.
+
+  **Still open**, in roughly dependency order:
+  - Wire `driveConfig` into a real `ModbusTcpIoDriver`/`ModbusRtuIoDriver` --
+    `apps/plc_server` always runs `SimulatedIoDriver` today regardless of what's
+    configured in a project.
+  - A way for a network to express a computed value assignment (e.g. `Out1 := In1 *
+    2;`), not just boolean logic + FB/FC calls -- discovered while hand-verifying the
+    compiler (real Ladder handles this with MOVE/CALC/arithmetic boxes; none are
+    modeled yet), so an FB/FC that needs to *compute* something currently can't,
+    purely through the network editor.
+  - A real multi-task scheduler so a Cyclic Interrupt block runs on a genuinely
+    independent timer/thread instead of v1's inline accumulate-and-fire-within-Main
+    approximation (see "Cyclic Interrupt" in `docs/architecture.md` for the trade-off
+    and why it was chosen deliberately for now) -- the "Task scheduling" item below.
+  - A real graphical (2-D grid, drag-and-drop) Ladder rendering of a network, in place
+    of today's structured form editor -- compiling to the same `RungStmt`/`CallStmt`
+    either via the textual `RUNG` grammar or a JSON IR built server-side (see "FB/FC
+    boxes on a rung" in `docs/architecture.md`).
+  - A genuine IL/STL front end compiling its accumulator+jump model down into the
+    existing `Expr`/`Stmt` tree (`ast.hpp` has no label/goto construct today, so this
+    needs either a restricted structured-jump subset or a new jump-capable execution
+    primitive — a real design decision, not yet made).
+  - Wiring `web/`'s `npm run build` into the CMake build (the two build systems are
+    independent for now).
+
+  A real graphical Ladder *editor UI* (drag-and-drop rungs, etc.) and IL/STL support
+  are each inherently large, multi-session undertakings — expect them to land
+  incrementally, each slice with its own tests, rather than as one change.
