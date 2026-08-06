@@ -37,6 +37,49 @@ describe('compileProject', () => {
     expect(() => compileProject(project)).toThrow(/coil 1 has no target tag/)
   })
 
+  it('rejects an empty-tag rung contact even though the derived condition text looks plausible', () => {
+    // A real bug this exact check exists to catch: net.condition is derived from
+    // net.rung and would otherwise silently contain a blank identifier.
+    const project = emptyProject('P')
+    project.blocks[0].networks = [
+      {
+        calls: [],
+        condition: ' AND NOT Stop',
+        rung: {
+          segments: [
+            { kind: 'contact', negate: false, tag: '' },
+            { kind: 'contact', negate: true, tag: 'Stop' },
+          ],
+        },
+        outputs: [],
+      },
+    ]
+    expect(() => compileProject(project)).toThrow(/rung segment 1 has no tag/)
+  })
+
+  it('rejects an empty-tag contact inside a parallel rung branch', () => {
+    const project = emptyProject('P')
+    project.blocks[0].networks = [
+      {
+        calls: [],
+        condition: '(Start OR )',
+        rung: {
+          segments: [
+            {
+              kind: 'parallel',
+              branches: [
+                { kind: 'contact', negate: false, tag: 'Start' },
+                { kind: 'contact', negate: false, tag: '' },
+              ],
+            },
+          ],
+        },
+        outputs: [],
+      },
+    ]
+    expect(() => compileProject(project)).toThrow(/rung segment 1, branch 2 has no tag/)
+  })
+
   it('rejects an incomplete FB/FC call (missing callee, param, or expr)', () => {
     const project = emptyProject('P')
     project.blocks[0].networks = [{ calls: [{ calleeName: '', args: [] }], condition: '', outputs: [] }]

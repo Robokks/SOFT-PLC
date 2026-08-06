@@ -322,6 +322,106 @@ section {
   margin: 8px 0;
 }
 
+.network-editor__mode-toggle {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+/* Ladder rung diagram */
+
+.rung-diagram {
+  margin: 8px 0;
+}
+
+.rung-diagram__svg {
+  display: block;
+  max-width: 100%;
+  color: var(--text);
+  background: var(--row-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.rung-diagram__rail {
+  stroke: var(--text);
+  stroke-width: 2;
+}
+
+.rung-diagram__wire {
+  stroke: var(--text);
+  stroke-width: 1.5;
+}
+
+.rung-diagram__contact line {
+  stroke: var(--text);
+  stroke-width: 1.5;
+}
+
+.rung-diagram__contact text,
+.rung-diagram__coil text {
+  fill: var(--text);
+  font-size: 11px;
+}
+
+.rung-diagram__coil rect {
+  stroke: var(--text);
+  stroke-width: 1.5;
+  fill: none;
+}
+
+.rung-diagram__coil-kind {
+  font-weight: 700;
+}
+
+.rung-diagram__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  align-items: flex-start;
+}
+
+.segment-controls {
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.segment-controls--parallel {
+  border-style: solid;
+}
+
+.segment-controls__branch {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.contact-fields {
+  display: flex;
+  gap: 4px;
+}
+
+.contact-fields input {
+  width: 7em;
+}
+
+.coil-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.coil-controls__item {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
 /* Data blocks / IO linking / drive config */
 
 .data-blocks-section__block,

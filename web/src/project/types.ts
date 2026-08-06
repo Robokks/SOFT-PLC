@@ -51,15 +51,51 @@ export interface CoilOutput {
   target: string
 }
 
+// A normally-open (negate: false) or normally-closed (negate: true) contact -- one
+// symbol on a rung, referencing a BOOL tag by name.
+export interface ContactElement {
+  kind: 'contact'
+  negate: boolean
+  tag: string
+}
+
+// A set of contacts wired in parallel (OR) between two points on the rung. v1
+// deliberately keeps each branch a single contact (no AND-chain inside an OR branch,
+// e.g. no graphical "(A AND B) OR C") -- covers the common seal-in/interlock shape
+// ("(Start OR Motor) AND NOT Stop") with a much simpler layout/edit model; a nested
+// version (branches: ContactElement[][]) is a documented, compatible future
+// extension, not a redesign.
+export interface ParallelElement {
+  kind: 'parallel'
+  branches: ContactElement[]
+}
+
+export type RungSegment = ContactElement | ParallelElement
+
+// A rung's logic as a structured series of segments (AND'd together), each segment
+// either a plain contact or a parallel (OR) group -- see
+// web/src/project/ladder/logic.ts's rungLogicToCondition() for how this becomes the
+// same condition text RungStmt already compiles from (RUNG's grammar is exactly
+// series=AND/parallel=OR/negate=NOT, so this is a direct structural match, not a
+// new capability). This is the *editable* representation the graphical
+// RungDiagram renders/edits; `NetworkDef.condition` stays the single value
+// compile.ts actually reads, kept in sync by whoever edits `rung`.
+export interface RungLogic {
+  segments: RungSegment[]
+}
+
 // One Ladder network: an optional row of FB/FC boxes, then a boolean condition
 // (built from the same contact/branch grammar RUNG already reuses -- series contacts
 // are AND, parallel branches are OR, a normally-closed contact is NOT tag) driving one
-// or more coils.
+// or more coils. `rung`, when present, is the structured graphical-editor state that
+// `condition` is derived from; absent, `condition` is a plain free-text field (the
+// "advanced"/text mode -- see NetworkList.tsx's per-network toggle).
 export interface NetworkDef {
   title?: string
   comment?: string
   calls: CallDef[]
   condition: string
+  rung?: RungLogic
   outputs: CoilOutput[]
 }
 

@@ -673,15 +673,59 @@ first try.
 `PROGRAM`), `CyclicInterrupt`, `FunctionBlock`, or `Function`. A `NetworkDef` is one
 Ladder rung: an optional title/comment, a row of FB/FC "boxes" (`CallDef`s, compiled to
 plain `CallStmt`s immediately before the rung -- see "FB/FC boxes on a rung" above),
-a boolean condition (free-text, using the same series/parallel/NOT contact grammar
-`RUNG` already reuses, e.g. `(Start OR Motor) AND NOT Stop`), and one or more
-Direct/Set/Reset coils. `BlockTree`/`BlockEditor`/`NetworkList` (`web/src/project/`)
-edit this structure directly; adding a block is a button ("+ Cyclic Interrupt" / "+
-Function Block" / "+ Function") rather than a right-click context menu -- same
-functional outcome as originally asked for, simpler to build and test. Each var
-section (`VarDeclList`) and the instance list (`InstanceList`) are shared components
-reused across every block kind, `DATA_BLOCK` members, and the IO-linking list, so
-there's exactly one editable-table implementation rather than one per use.
+a boolean condition -- either free text (using the same series/parallel/NOT contact
+grammar `RUNG` already reuses, e.g. `(Start OR Motor) AND NOT Stop`) or, per network,
+a real graphical Ladder editor (see "Graphical Ladder rung editor" below) -- and one
+or more Direct/Set/Reset coils. `BlockTree`/`BlockEditor`/`NetworkList`
+(`web/src/project/`) edit this structure directly; adding a block is a button ("+
+Cyclic Interrupt" / "+ Function Block" / "+ Function") rather than a right-click
+context menu -- same functional outcome as originally asked for, simpler to build and
+test. Each var section (`VarDeclList`) and the instance list (`InstanceList`) are
+shared components reused across every block kind, `DATA_BLOCK` members, and the
+IO-linking list, so there's exactly one editable-table implementation rather than one
+per use.
+
+**Graphical Ladder rung editor (`web/src/project/ladder/`).** Each network can be
+switched ("Switch to graphical ladder" / "Switch to text condition") between the
+free-text condition input and a real rendered rung: two rails, series contacts, OR
+branches drawn as parallel wires with tie bars, and coils, updating live as it's
+edited -- not the structured-form stand-in the rest of `NetworkList` still is for
+calls/coils-as-a-table. `RungLogic` (`types.ts`) models a rung as a series of
+segments, each either a plain `ContactElement` (NO/NC + tag) or a `ParallelElement`
+(a flat list of contacts OR'd together); `rungLogicToCondition()`
+(`ladder/logic.ts`) derives the exact same condition text `RUNG` already
+parses -- parenthesizing an OR group whenever it's combined with anything else in
+series, since `RUNG`'s grammar binds AND tighter than OR (see "Ladder Diagram"
+above) and `Start OR Motor AND NOT Stop` would otherwise parse as
+`Start OR (Motor AND NOT Stop)`, not the intended seal-in circuit. This derivation
+is the *only* integration point: `NetworkDef.rung` is purely UI state (so the
+diagram round-trips when a project is reopened) and whoever edits it
+(`NetworkEditor`'s `onRungChange`) always recomputes `condition` from it in the same
+call, so `compile.ts`'s `emitNetwork()` needed **zero changes** -- it has never heard
+of `rung` and never will. `RungDiagram.tsx` renders the wires/rails/contacts/coils as
+SVG and puts the actual editing controls (add/remove contact, add/remove OR branch,
+NO/NC toggle, coil kind/target) in a strip below, in the same left-to-right order as
+the diagram, rather than manipulating the SVG directly (e.g. drag-and-drop) -- real
+graphical *rendering*, editing via ordinary controls rather than a canvas
+interaction model, which is what made this buildable and testable in one pass rather
+than its own multi-session effort.
+
+**Known, deliberate simplification: an OR branch is a single contact, not a
+sub-chain.** `ParallelElement.branches` is `ContactElement[]`, not
+`ContactElement[][]` -- so the graphical editor can express `(Start OR Motor) AND NOT
+Stop` (branches are single contacts) but not `(A AND B) OR C` (a branch that's
+itself a 2-contact AND chain) directly. This covers the seal-in/interlock idiom that
+motivated building this at all, in exchange for a much simpler layout and edit
+model (no recursive nesting to lay out or wire up); widening `branches` to
+`ContactElement[][]` later is additive, not a redesign, since `rungLogicToCondition()`
+already handles an AND-chain-within-a-branch correctly by construction (RUNG's own
+AND-binds-tighter-than-OR precedence does the work) -- only the diagram's layout math
+and the branch-editing controls would need to grow a level.
+
+Verified against the real backend by hand: built the exact seal-in circuit
+graphically (three clicks and three tag names -- add OR branch, add series contact,
+toggle NC), compiled, downloaded, and drove `Start`/`Stop` through the live monitor to
+confirm the coil actually latches and releases correctly.
 
 **Grammar constraints the compiler enforces even though the UI doesn't fully.** A
 top-level `PROGRAM`'s grammar (`Parser::parseProgram()`) has no `VAR_TEMP` keyword at

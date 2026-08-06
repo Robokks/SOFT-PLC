@@ -200,6 +200,20 @@ function validateProject(project: Project): void {
       if (net.outputs.length > 0 && net.condition.trim() === '') {
         throw new ProjectCompileError(`${label}: has a coil but no condition.`)
       }
+      // net.condition is always derived from net.rung when the latter is present
+      // (see NetworkList.tsx's NetworkEditor), so validating condition text alone
+      // wouldn't catch an empty contact tag -- it'd just see a blank identifier
+      // spliced into otherwise-valid-looking text. Walk the structured form instead.
+      net.rung?.segments.forEach((seg, si) => {
+        const contacts = seg.kind === 'contact' ? [seg] : seg.branches
+        contacts.forEach((c, ci) => {
+          if (c.tag.trim() === '') {
+            const where2 =
+              seg.kind === 'parallel' ? `rung segment ${si + 1}, branch ${ci + 1}` : `rung segment ${si + 1}`
+            throw new ProjectCompileError(`${label}: ${where2} has no tag.`)
+          }
+        })
+      })
     })
   }
 

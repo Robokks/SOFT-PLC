@@ -114,12 +114,18 @@ Explicitly out of scope for Phase 1's ST subset (parser will reject these):
   the active project's saved program on startup). A full project-authoring frontend
   (`web/src/project/`, see "Project model and compiler" in `docs/architecture.md`):
   create/open projects; a Programming section with a block tree (Main, Cyclic
-  Interrupt, Function Block, Function) and a structured per-network editor (condition
-  + coils + FB/FC calls); Data Block creation; IO linking; Modbus drive configuration
-  (form-only, see below); and a client-side compiler turning all of that into ST
-  source the existing backend parses completely unchanged — this landed with **zero
-  backend/interpreter changes**. Verified end-to-end by hand repeatedly, including a
-  full process restart auto-reloading and auto-running the last-active project.
+  Interrupt, Function Block, Function) and a per-network editor (calls + coils, plus
+  a real **graphical Ladder rung editor** per network — rails, series/OR contacts,
+  coils, rendered live from a structured `RungLogic` and editable via on-screen
+  controls, not drag-and-drop — see "Graphical Ladder rung editor" in
+  `docs/architecture.md`); Data Block creation; IO linking; Modbus drive
+  configuration (form-only, see below); and a client-side compiler turning all of
+  that into ST source the existing backend parses completely unchanged — this landed
+  with **zero backend/interpreter changes**, including the graphical rung editor
+  itself (it only ever produces the same condition text the textual editor did).
+  Verified end-to-end by hand repeatedly, including a full process restart
+  auto-reloading and auto-running the last-active project, and a seal-in circuit
+  built purely through the graphical ladder editor, downloaded, and exercised live.
 
   **Still open**, in roughly dependency order:
   - Wire `driveConfig` into a real `ModbusTcpIoDriver`/`ModbusRtuIoDriver` --
@@ -134,10 +140,12 @@ Explicitly out of scope for Phase 1's ST subset (parser will reject these):
     independent timer/thread instead of v1's inline accumulate-and-fire-within-Main
     approximation (see "Cyclic Interrupt" in `docs/architecture.md` for the trade-off
     and why it was chosen deliberately for now) -- the "Task scheduling" item below.
-  - A real graphical (2-D grid, drag-and-drop) Ladder rendering of a network, in place
-    of today's structured form editor -- compiling to the same `RungStmt`/`CallStmt`
-    either via the textual `RUNG` grammar or a JSON IR built server-side (see "FB/FC
-    boxes on a rung" in `docs/architecture.md`).
+  - Widen the graphical Ladder editor's OR-branch model from a single contact per
+    branch to a branch that's itself a short AND-chain (e.g. `(A AND B) OR C`) --
+    additive to `RungLogic`, not a redesign (see "Known, deliberate simplification"
+    in `docs/architecture.md`).
+  - True drag-and-drop / free 2-D placement for the graphical Ladder editor, in place
+    of today's add/remove-via-controls interaction model.
   - A genuine IL/STL front end compiling its accumulator+jump model down into the
     existing `Expr`/`Stmt` tree (`ast.hpp` has no label/goto construct today, so this
     needs either a restricted structured-jump subset or a new jump-capable execution
@@ -145,6 +153,5 @@ Explicitly out of scope for Phase 1's ST subset (parser will reject these):
   - Wiring `web/`'s `npm run build` into the CMake build (the two build systems are
     independent for now).
 
-  A real graphical Ladder *editor UI* (drag-and-drop rungs, etc.) and IL/STL support
-  are each inherently large, multi-session undertakings — expect them to land
+  IL/STL support is its own large, multi-session undertaking — expect it to land
   incrementally, each slice with its own tests, rather than as one change.

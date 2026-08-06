@@ -60,4 +60,33 @@ describe('BlockTree', () => {
     expect(source).toContain('IF __CyclicAccum_FastPoll >= T#250ms THEN')
     expect(source).toContain('RUNG NOT Heartbeat => Heartbeat;')
   })
+
+  it('builds the seal-in circuit as a real Ladder diagram through UI interactions alone', () => {
+    let latest: Project = emptyProject('Line1')
+    render(<Harness onProject={(p) => (latest = p)} />)
+
+    // Main is selected by default; add a network and switch it into graphical mode.
+    fireEvent.click(screen.getByRole('button', { name: /\+ Add network/ }))
+    fireEvent.click(screen.getByRole('button', { name: /switch to graphical ladder/i }))
+
+    // Starts as a single empty contact -- name it, then turn it into an OR branch.
+    fireEvent.change(screen.getByPlaceholderText('Tag'), { target: { value: 'Start' } })
+    fireEvent.click(screen.getByRole('button', { name: '+ OR branch' }))
+    const tagInputs1 = screen.getAllByPlaceholderText('Tag')
+    fireEvent.change(tagInputs1[1], { target: { value: 'Motor' } })
+
+    // Add the series NOT Stop contact after the OR group.
+    fireEvent.click(screen.getByRole('button', { name: '+ Series contact' }))
+    const tagInputs2 = screen.getAllByPlaceholderText('Tag')
+    fireEvent.change(tagInputs2[2], { target: { value: 'Stop' } })
+    const selects = screen.getAllByRole('combobox')
+    fireEvent.change(selects[selects.length - 1], { target: { value: 'NC' } })
+
+    // Drive the coil.
+    fireEvent.click(screen.getByRole('button', { name: '+ Add coil' }))
+    fireEvent.change(screen.getByPlaceholderText('Target tag'), { target: { value: 'Motor' } })
+
+    const source = compileProject(latest)
+    expect(source).toContain('RUNG (Start OR Motor) AND NOT Stop => Motor;')
+  })
 })

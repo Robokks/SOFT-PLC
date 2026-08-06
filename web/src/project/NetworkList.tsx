@@ -1,5 +1,7 @@
 import type { CallArg, CallDef, CoilKind, CoilOutput, NetworkDef } from './types'
 import { appendItem, removeAt, replaceAt } from './edit'
+import { RungDiagram } from './ladder/RungDiagram'
+import { emptyRungLogic, rungLogicToCondition } from './ladder/logic'
 
 const kCoilKinds: CoilKind[] = ['Direct', 'Set', 'Reset']
 
@@ -193,19 +195,44 @@ function NetworkEditor({
         </button>
       </div>
 
-      <label className="network-editor__condition">
-        Condition
-        <input
-          placeholder="(Start OR Motor) AND NOT Stop"
-          value={network.condition}
-          onChange={(e) => onChange({ ...network, condition: e.target.value })}
+      {network.rung ? (
+        <RungDiagram
+          rung={network.rung}
+          outputs={network.outputs}
+          onRungChange={(rung) => onChange({ ...network, rung, condition: rungLogicToCondition(rung) })}
+          onOutputsChange={(outputs) => onChange({ ...network, outputs })}
         />
-      </label>
-
-      <CoilEditor
-        outputs={network.outputs}
-        onChange={(outputs) => onChange({ ...network, outputs })}
-      />
+      ) : (
+        <>
+          <label className="network-editor__condition">
+            Condition
+            <input
+              placeholder="(Start OR Motor) AND NOT Stop"
+              value={network.condition}
+              onChange={(e) => onChange({ ...network, condition: e.target.value })}
+            />
+          </label>
+          <CoilEditor
+            outputs={network.outputs}
+            onChange={(outputs) => onChange({ ...network, outputs })}
+          />
+        </>
+      )}
+      <button
+        className="network-editor__mode-toggle"
+        onClick={() => {
+          if (network.rung) {
+            // Switch to text mode: drop the structured state but keep the last
+            // derived condition text exactly as it was, so nothing is lost.
+            onChange({ ...network, rung: undefined })
+          } else {
+            const rung = emptyRungLogic()
+            onChange({ ...network, rung, condition: rungLogicToCondition(rung) })
+          }
+        }}
+      >
+        {network.rung ? 'Switch to text condition' : 'Switch to graphical ladder'}
+      </button>
     </div>
   )
 }
