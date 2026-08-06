@@ -147,11 +147,89 @@ function emitMainVarSections(main: BlockDef, ioLinking: VarDecl[], cyclicBlocks:
 
 export class ProjectCompileError extends Error {}
 
+// Catches incomplete rows (a "+ Add ..." row added and never filled in) before they
+// turn into invalid ST that only the backend parser would reject -- and reject with a
+// line/column number that means nothing next to a form field. Every check here is a
+// UI mistake this exact interaction pattern makes possible, found by driving the real
+// app end-to-end and reading its own error output (see docs/architecture.md's
+// "Project model and compiler" section): an empty-named IO-linking row silently
+// compiled to `    : BOOL;`, surfacing only "expected variable name but found ':'
+// (line 9, col 11)" -- correct, but useless to someone who has never seen the
+// generated source.
+function validateProject(project: Project): void {
+  function checkVarDecls(decls: VarDecl[] | undefined, where: string): void {
+    (decls ?? []).forEach((d, i) => {
+      if (d.name.trim() === '') {
+        throw new ProjectCompileError(`${where}: row ${i + 1} has no name.`)
+      }
+    })
+  }
+  function checkInstances(instances: InstanceDecl[] | undefined, where: string): void {
+    (instances ?? []).forEach((inst, i) => {
+      if (inst.name.trim() === '') {
+        throw new ProjectCompileError(`${where}: instance row ${i + 1} has no name.`)
+      }
+      if (inst.typeName.trim() === '') {
+        throw new ProjectCompileError(`${where}: instance '${inst.name}' has no type selected.`)
+      }
+    })
+  }
+  function checkNetworks(networks: NetworkDef[], where: string): void {
+    networks.forEach((net, i) => {
+      const label = `${where}, network ${i + 1}${net.title ? ` ('${net.title}')` : ''}`
+      net.calls.forEach((call, ci) => {
+        if (call.calleeName.trim() === '') {
+          throw new ProjectCompileError(`${label}: call ${ci + 1} has no instance/Function selected.`)
+        }
+        call.args.forEach((arg, ai) => {
+          if (arg.param.trim() === '') {
+            throw new ProjectCompileError(`${label}: call ${ci + 1}, arg ${ai + 1} has no param name.`)
+          }
+          if (arg.expr.trim() === '') {
+            throw new ProjectCompileError(
+              `${label}: call ${ci + 1}, arg '${arg.param}' has no expression/target.`,
+            )
+          }
+        })
+      })
+      net.outputs.forEach((out, oi) => {
+        if (out.target.trim() === '') {
+          throw new ProjectCompileError(`${label}: coil ${oi + 1} has no target tag.`)
+        }
+      })
+      if (net.outputs.length > 0 && net.condition.trim() === '') {
+        throw new ProjectCompileError(`${label}: has a coil but no condition.`)
+      }
+    })
+  }
+
+  checkVarDecls(project.ioLinking, 'IO Linking')
+  for (const db of project.dataBlocks) {
+    if (db.name.trim() === '') {
+      throw new ProjectCompileError('Data Blocks: a block has no name.')
+    }
+    checkVarDecls(db.members, `Data Block '${db.name}'`)
+  }
+  for (const block of project.blocks) {
+    if (block.name.trim() === '') {
+      throw new ProjectCompileError(`A ${block.kind} block has no name.`)
+    }
+    checkVarDecls(block.varInput, `Block '${block.name}' VAR_INPUT`)
+    checkVarDecls(block.varOutput, `Block '${block.name}' VAR_OUTPUT`)
+    checkVarDecls(block.vars, `Block '${block.name}' VAR`)
+    checkVarDecls(block.varTemp, `Block '${block.name}' VAR_TEMP`)
+    checkInstances(block.instances, `Block '${block.name}'`)
+    checkNetworks(block.networks, `Block '${block.name}'`)
+  }
+}
+
 export function compileProject(project: Project): string {
   const main = project.blocks.find((b) => b.kind === 'Main')
   if (!main) {
     throw new ProjectCompileError('Project has no Main block -- add one before compiling.')
   }
+  validateProject(project)
+
   const cyclicBlocks = project.blocks.filter((b) => b.kind === 'CyclicInterrupt')
   const pouBlocks = project.blocks.filter((b) => b.kind === 'FunctionBlock' || b.kind === 'Function')
 

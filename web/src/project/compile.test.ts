@@ -9,6 +9,45 @@ describe('compileProject', () => {
     expect(() => compileProject(project)).toThrow(ProjectCompileError)
   })
 
+  it('rejects an empty-named IO-linking row instead of emitting invalid ST', () => {
+    // A real bug caught by hand end-to-end testing: an "+ Add IO tags" row added and
+    // never filled in used to compile silently to `    : BOOL;`, surfacing only the
+    // backend parser's line/column error.
+    const project = emptyProject('P')
+    project.ioLinking = [{ name: '', type: 'BOOL' }]
+
+    expect(() => compileProject(project)).toThrow(/IO Linking: row 1 has no name/)
+  })
+
+  it('rejects an incomplete FB instance (missing name or type)', () => {
+    const project = emptyProject('P')
+    project.blocks[0].instances = [{ name: '', typeName: 'FB_Motor' }]
+    expect(() => compileProject(project)).toThrow(/instance row 1 has no name/)
+
+    project.blocks[0].instances = [{ name: 'Motor1', typeName: '' }]
+    expect(() => compileProject(project)).toThrow(/instance 'Motor1' has no type selected/)
+  })
+
+  it('rejects a network with a coil but no condition, or a coil with no target', () => {
+    const project = emptyProject('P')
+    project.blocks[0].networks = [{ calls: [], condition: '', outputs: [{ kind: 'Direct', target: 'Motor' }] }]
+    expect(() => compileProject(project)).toThrow(/has a coil but no condition/)
+
+    project.blocks[0].networks = [{ calls: [], condition: 'Start', outputs: [{ kind: 'Direct', target: '' }] }]
+    expect(() => compileProject(project)).toThrow(/coil 1 has no target tag/)
+  })
+
+  it('rejects an incomplete FB/FC call (missing callee, param, or expr)', () => {
+    const project = emptyProject('P')
+    project.blocks[0].networks = [{ calls: [{ calleeName: '', args: [] }], condition: '', outputs: [] }]
+    expect(() => compileProject(project)).toThrow(/has no instance\/Function selected/)
+
+    project.blocks[0].networks = [
+      { calls: [{ calleeName: 'Edge1', args: [{ param: '', direction: 'in', expr: 'X' }] }], condition: '', outputs: [] },
+    ]
+    expect(() => compileProject(project)).toThrow(/has no param name/)
+  })
+
   it('never emits VAR_TEMP for Main, since a top-level PROGRAM has no such keyword', () => {
     const project = emptyProject('P')
     // Even if a hand-edited/imported project sets this (the UI never allows it), the
