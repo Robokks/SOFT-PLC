@@ -42,6 +42,7 @@ public:
     [[nodiscard]] std::string nameOf(TagId id) const;
 
     [[nodiscard]] std::size_t size() const;
+    [[nodiscard]] std::vector<Tag> snapshot() const;
 
     // Invokes fn(const Tag&) for every declared tag whose address falls in `area`,
     // while holding a single shared lock for the whole scan (used by I/O drivers).

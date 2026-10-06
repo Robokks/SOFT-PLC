@@ -28,10 +28,15 @@ if(SOFTPLC_ENABLE_SANITIZERS)
     )
 endif()
 
-include(cmake/FetchNanomodbus.cmake)
+option(SOFTPLC_ENABLE_MODBUS "Build Modbus client drivers" ON)
+if(SOFTPLC_ENABLE_MODBUS)
+    include(cmake/FetchNanomodbus.cmake)
+endif()
 
 add_subdirectory(src)
 add_subdirectory(apps/plc_runner)
+add_subdirectory(apps/plc_codegen)
+add_subdirectory(apps/plc_runtime)
 
 if(SOFTPLC_BUILD_TESTS)
     enable_testing()

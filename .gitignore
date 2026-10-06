@@ -11,3 +11,13 @@ compile_commands.json
 .cache/
 .vscode/
 .idea/
+
+__pycache__/
+*.pyc
+*.dll
+*.lib
+*.exp
+*.pdb
+*.ilk
+dist/
+node_modules/

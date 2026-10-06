@@ -32,6 +32,7 @@ struct BinderContext {
     // output).
     std::vector<std::string> expandingTypes;
     int fcCallCounter = 0;
+    std::unordered_map<std::string, CallableInfo> globalCallables;
 };
 
 struct ExpansionResult {
@@ -98,6 +99,7 @@ DeclResult declareVars(const std::vector<VarDecl>& varDecls, const std::string& 
             }
             result.instanceCallables[decl.name] =
                 CallableInfo{nestedPou, nested.frameIndexOfSelf, std::move(nested.localScope)};
+            if (tagPrefix.empty()) ctx.globalCallables[decl.name] = result.instanceCallables.at(decl.name);
         } else {
             throw std::runtime_error("internal error: VarDecl '" + decl.name +
                                       "' has neither an elementary type nor an instance type");
@@ -141,6 +143,8 @@ void bindCallStmt(CallStmt& call, const std::unordered_map<std::string, tags::Ta
     auto instIt = instanceCallables.find(call.calleeName);
     if (instIt != instanceCallables.end()) {
         info = &instIt->second;
+    } else if (auto global = ctx.globalCallables.find(call.calleeName); global != ctx.globalCallables.end()) {
+        info = &global->second;
     } else {
         auto regIt = ctx.registry.find(call.calleeName);
         if (regIt == ctx.registry.end()) {
@@ -283,8 +287,9 @@ ExpansionResult expandPou(const PouAst& pou, const std::string& tagPrefix, Binde
     bindStmtListInto(boundBody, decls.localScope, decls.instanceCallables, ctx);
 
     Frame frame;
+    frame.scopeName = tagPrefix;
     for (const auto& decl : pou.varDecls) {
-        if (decl.kind == VarKind::VarTemp && decl.elementaryType) {
+        if ((decl.kind == VarKind::VarTemp || (pou.isFunction && decl.kind == VarKind::VarOutput)) && decl.elementaryType) {
             const tags::TagId id = decls.localScope.at(decl.name);
             tags::Value resetValue =
                 decl.initialValue ? *decl.initialValue : tags::defaultValueFor(*decl.elementaryType);

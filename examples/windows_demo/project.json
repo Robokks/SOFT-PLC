@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "name": "Motor control demo",
+  "data_blocks": [
+    {"number": 1, "name": "Machine", "fields": [
+      {"name": "Start", "type": "BOOL", "offset": 0, "bit": 0, "initial": false},
+      {"name": "Stop", "type": "BOOL", "offset": 0, "bit": 1, "initial": false},
+      {"name": "Run", "type": "BOOL", "offset": 0, "bit": 2, "initial": false},
+      {"name": "Heartbeat", "type": "BOOL", "offset": 0, "bit": 3, "initial": false},
+      {"name": "Command", "type": "DINT", "offset": 4, "initial": 50},
+      {"name": "Speed", "type": "DINT", "offset": 8, "initial": 0},
+      {"name": "Scans", "type": "DINT", "offset": 12, "initial": 0},
+      {"name": "CyclicCount", "type": "DINT", "offset": 16, "initial": 0},
+      {"name": "NativeCCount", "type": "DINT", "offset": 20, "initial": 0},
+      {"name": "NativeCppCount", "type": "DINT", "offset": 24, "initial": 0},
+      {"name": "StartupCount", "type": "DINT", "offset": 28, "initial": 0},
+      {"name": "MotorReady", "type": "BOOL", "offset": 32, "bit": 0, "initial": false}
+    ]}
+  ],
+  "globals": [{"name":"MotorOutput","type":"BOOL","address":"%Q0.0","initial":false}],
+  "blocks": [
+    {"name":"FB_Motor","kind":"FB","declarations":"VAR_INPUT\n Enable : BOOL;\nEND_VAR\nVAR_OUTPUT\n Ready : BOOL;\nEND_VAR\nVAR\n RunScans : DINT;\nEND_VAR", "networks":[
+      {"title":"Motor state","language":"SCL","source":"IF Enable THEN\n RunScans := RunScans + 1;\nELSE\n RunScans := 0;\nEND_IF;\nReady := Enable;"}
+    ]},
+    {"name":"FC_Scale","kind":"FC","declarations":"VAR_INPUT\n InputValue : DINT;\nEND_VAR\nVAR_OUTPUT\n Result : DINT;\nEND_VAR", "networks":[
+      {"title":"Scale command","language":"SCL","source":"Result := InputValue * 2;"}
+    ]}
+  ],
+  "instances": [{"name":"Motor1","type":"FB_Motor","db":101}],
+  "tasks": [
+    {"ob":100,"kind":"startup","period_ms":10,"priority":20,"watchdog_ms":1000,"networks":[
+      {"title":"Startup initialization","language":"SCL","source":"DB1.StartupCount := DB1.StartupCount + 1;\nDB1.Run := FALSE;"}
+    ]},
+    {"ob":1,"kind":"main","period_ms":10,"priority":1,"watchdog_ms":1000,"networks":[
+      {"title":"Start / stop seal-in circuit","language":"LAD","branches":[[{"tag":"DB1.Start","nc":false},{"tag":"DB1.Stop","nc":true}],[{"tag":"DB1.Run","nc":false},{"tag":"DB1.Stop","nc":true}]],"coils":[{"tag":"DB1.Run","mode":"coil"}],"calls":[]},
+      {"title":"Call motor instance DB101","language":"SCL","source":"Motor1(Enable := DB1.Run, Ready => DB1.MotorReady);\nMotorOutput := Motor1.Ready;"},
+      {"title":"Scale with FC","language":"STL","source":"CALL FC_Scale(InputValue := DB1.Command, Result => DB1.Speed)"},
+      {"title":"Scan counter","language":"STL","source":"L DB1.DBD12\nL 1\n+I\nT DB1.DBD12"},
+      {"title":"Native C network","language":"C","source":"PlcValue value;\nPLC_TRY(plc_read(ctx, \"DB1.NativeCCount\", &value));\nif (value.integer >= 2147483647) return -1;\nPLC_TRY(plc_write_dint(ctx, \"DB1.NativeCCount\", (int32_t)(value.integer + 1)));"},
+      {"title":"Native C++ network","language":"CPP","source":"PlcValue value{};\nPLC_TRY(plc_read(ctx, \"DB1.NativeCppCount\", &value));\nif (value.integer >= 2147483647) return -1;\nPLC_TRY(plc_write_dint(ctx, \"DB1.NativeCppCount\", static_cast<int32_t>(value.integer + 1)));"}
+    ]},
+    {"ob":35,"kind":"cyclic","period_ms":100,"priority":12,"watchdog_ms":1000,"networks":[
+      {"title":"100 ms cyclic interrupt","language":"SCL","source":"DB1.CyclicCount := DB1.CyclicCount + 1;\nDB1.Heartbeat := NOT DB1.Heartbeat;"}
+    ]}
+  ]
+}
