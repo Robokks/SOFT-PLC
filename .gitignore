@@ -21,3 +21,4 @@ __pycache__/
 *.ilk
 dist/
 node_modules/
+portable/

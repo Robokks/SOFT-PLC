@@ -13,6 +13,8 @@ jobs:
       matrix:
         os: [windows-2022, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
+    env:
+      SOFTPLC_COMPILER: msvc
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,27 +26,45 @@ jobs:
         run: cmake -S . -B build/core-tests -DSOFTPLC_ENABLE_MODBUS=OFF -DSOFTPLC_BUILD_TESTS=ON
       - run: cmake --build build/core-tests --config Debug --parallel 2
       - run: ctest --test-dir build/core-tests -C Debug --output-on-failure
+
+  portable-windows:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    env:
+      SOFTPLC_COMPILER: mingw
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Prepare pinned open-source compiler and Python
+        run: python tools/portable.py --prepare
+      - name: Exercise all five PLC languages with GCC
+        run: python -m unittest discover -s tests/studio -v
+      - name: Package offline Windows Studio
+        run: python tools/package_studio.py --portable
       - uses: actions/setup-node@v4
-        if: runner.os == 'Windows'
         with:
           node-version: '22'
       - name: Install browser test driver
-        if: runner.os == 'Windows'
         run: npm install --no-save --package-lock=false --ignore-scripts playwright@1.58.2
-      - name: Exercise the engineering interface in Edge
-        if: runner.os == 'Windows'
+      - name: Extract the delivery ZIP into a path with spaces
+        shell: pwsh
+        run: |
+          $destination = Join-Path $env:RUNNER_TEMP 'SOFT PLC portable check'
+          Expand-Archive dist/SOFT-PLC-Studio-Windows-Portable.zip $destination
+          "SOFTPLC_TEST_ROOT=$destination\SOFT-PLC" >> $env:GITHUB_ENV
+          "SOFTPLC_TEST_PORTABLE=1" >> $env:GITHUB_ENV
+      - name: Exercise the packaged launcher with no external Python or compiler on PATH
         run: node tests/studio/browser_smoke.cjs
       - uses: actions/upload-artifact@v4
-        if: runner.os == 'Windows' && always()
+        if: always()
         with:
-          name: studio-browser-screenshots
-          path: build/studio/*.png
+          name: studio-portable-screenshots
+          path: ${{ env.SOFTPLC_TEST_ROOT }}/build/studio/*.png
           if-no-files-found: ignore
-      - name: Package Windows Studio
-        if: runner.os == 'Windows'
-        run: python tools/package_studio.py
       - uses: actions/upload-artifact@v4
-        if: runner.os == 'Windows'
         with:
-          name: SOFT-PLC-Studio-Windows
-          path: dist/SOFT-PLC-Studio-Windows.zip
+          name: SOFT-PLC-Studio-Windows-Portable
+          path: dist/SOFT-PLC-Studio-Windows-Portable.zip
+          compression-level: 0
