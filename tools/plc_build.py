@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from plc_project import prepare, map_symbols, ProjectError
 ROOT=Path(__file__).resolve().parents[1]
@@ -20,7 +21,15 @@ def compiler_environment():
             install=subprocess.check_output([str(vswhere),'-latest','-products','*','-requires','Microsoft.VisualStudio.Component.VC.Tools.x86.x64','-property','installationPath'],text=True).strip()
             if install:
                 vcvars=Path(install)/'VC/Auxiliary/Build/vcvars64.bat'
-                result=subprocess.run(['cmd','/d','/s','/c',f'call "{vcvars}" >nul && set'],capture_output=True,text=True,check=True)
+                # Pass a batch-file path, not nested cmd quotes through list2cmdline.
+                # Program Files contains spaces and cmd does not understand Python's
+                # backslash-escaped quotes for a command fragment.
+                with tempfile.TemporaryDirectory(prefix='softplc-env-') as temp:
+                    batch=Path(temp)/'environment.cmd'
+                    batch.write_text('@echo off\ncall "'+str(vcvars)+'" >nul\nif errorlevel 1 exit /b 1\nset\n')
+                    result=subprocess.run([env.get('COMSPEC','cmd.exe'),'/d','/c',str(batch)],capture_output=True,text=True)
+                if result.returncode:
+                    raise ProjectError('MSVC environment setup failed: '+result.stderr.strip())
                 for line in result.stdout.splitlines():
                     if '=' in line and not line.startswith('='):
                         k,v=line.split('=',1);env[k.upper()]=v
