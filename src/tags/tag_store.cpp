@@ -65,6 +65,11 @@ std::string TagStore::nameOf(TagId id) const {
     return at(id).name;
 }
 
+std::vector<Tag> TagStore::snapshot() const {
+    std::shared_lock lock(mutex_);
+    return tags_;
+}
+
 std::size_t TagStore::size() const {
     std::shared_lock lock(mutex_);
     return tags_.size();

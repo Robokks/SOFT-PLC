@@ -35,6 +35,7 @@ public:
 
     void execute(core::ScanContext& ctx) override;
     [[nodiscard]] std::string_view name() const override;
+    [[nodiscard]] const StProgramAst& boundAst() const { return ast_; }
 
 private:
     StProgramAst ast_;

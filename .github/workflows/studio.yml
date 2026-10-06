@@ -1,0 +1,50 @@
+name: Windows PLC Studio
+on:
+  push:
+    branches: ['codex/**', 'main', 'claude/soft-plc-development-f1bc0m']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-workflow:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile and exercise native PLC modules
+        run: python -m unittest discover -s tests/studio -v
+      - name: Build existing core tests without fieldbus dependencies
+        run: cmake -S . -B build/core-tests -DSOFTPLC_ENABLE_MODBUS=OFF -DSOFTPLC_BUILD_TESTS=ON
+      - run: cmake --build build/core-tests --config Debug --parallel 2
+      - run: ctest --test-dir build/core-tests -C Debug --output-on-failure
+      - uses: actions/setup-node@v4
+        if: runner.os == 'Windows'
+        with:
+          node-version: '22'
+      - name: Install browser test driver
+        if: runner.os == 'Windows'
+        run: npm install --no-save --package-lock=false --ignore-scripts playwright@1.58.2
+      - name: Exercise the engineering interface in Edge
+        if: runner.os == 'Windows'
+        run: node tests/studio/browser_smoke.cjs
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows' && always()
+        with:
+          name: studio-browser-screenshots
+          path: build/studio/*.png
+          if-no-files-found: ignore
+      - name: Package Windows Studio
+        if: runner.os == 'Windows'
+        run: python tools/package_studio.py
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: SOFT-PLC-Studio-Windows
+          path: dist/SOFT-PLC-Studio-Windows.zip

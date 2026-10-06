@@ -254,6 +254,7 @@ struct VarDecl {
 // by plain index (CallStmt::frameIndex), the same "index, not a pointer" idiom as
 // tags::TagId.
 struct Frame {
+    std::string scopeName;  // Stable instance/call-site name for compiled monitoring.
     StmtList body;
     // VAR_TEMP members only: reset to this value before every execution of this
     // frame (FC call-site scratch space must not retain state between calls).

@@ -1,5 +1,10 @@
 # Roadmap
 
+The Windows-first native Studio workflow now adds OB scheduling, numbered DB
+addressing, compiled modules and online monitoring. See
+[Windows Studio](windows-studio.md) for the implemented scope and remaining
+limitations. The Phase 1 notes below describe the original interpreted runner.
+
 ## Phase 1 (this repository, current state)
 
 Core scan-cycle engine, thread-safe tag database, simulated I/O, a real

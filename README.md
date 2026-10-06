@@ -1,5 +1,25 @@
 # SOFT-PLC
 
+## Windows-first PLC Studio
+
+A native **compile → load → RUN → monitor** workflow is now available.
+Double-click **Start-Studio.cmd** on Windows after installing Python 3.10+
+and Visual Studio 2022 C++ Build Tools (x64).
+
+- OB1 main task, startup OBs and periodic priority OBs such as OB35
+- Numbered DB addresses and separate FB instance DBs
+- FB/FC calls in ordered networks
+- Graphical Ladder, STL and SCL subsets, plus native C17/C++20 networks
+- Compiled DLL loading, STOP/RUN/FAULT, live tag writes and network monitoring
+
+See **[Windows setup, architecture and supported language scope](docs/windows-studio.md)**.
+Start with [`examples/windows_demo/project.json`](examples/windows_demo/project.json).
+This is a custom soft PLC inspired by Siemens block organization, not a
+Siemens binary-compatible or hard-real-time PLC. The new native runtime uses
+memory I/O; connecting the existing Modbus drivers is a later integration.
+
+## Original interpreted runtime
+
 A software PLC (Programmable Logic Controller) runtime, written in C++20.
 
 The long-term goal is to support all four IEC 61131-3 programming languages
