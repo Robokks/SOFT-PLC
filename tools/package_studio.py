@@ -12,7 +12,7 @@ def main():
     demo=compile_project(json.loads((ROOT/'examples/windows_demo/project.json').read_text(encoding='utf-8')))
     output=ROOT/'dist';output.mkdir(exist_ok=True);target=output/'SOFT-PLC-Studio-Windows.zip'
     with zipfile.ZipFile(target,'w',zipfile.ZIP_DEFLATED) as archive:
-        for dirname in ('include','src','apps','tools','docs','examples','cmake'):
+        for dirname in ('include','src','apps','tools','docs','examples','cmake','tests'):
             for path in (ROOT/dirname).rglob('*'):
                 if path.is_file() and '__pycache__' not in path.parts and path.suffix!='.pyc':archive.write(path,Path('SOFT-PLC')/path.relative_to(ROOT))
         for name in ('Start-Studio.cmd','README.md','LICENSE','CMakeLists.txt'):
