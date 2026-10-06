@@ -122,7 +122,9 @@ class RuntimeTests(unittest.TestCase):
         self.load(compile_project(p));self.assertEqual(values(self.runtime.command('STEP'))['DB1.A'],14)
     def test_higher_priority_cyclic_ob_can_interrupt_main_at_checkpoints(self):
         p=simple('WHILE NOT DB1.Flag DO\n DB1.A := DB1.A + 1;\nEND_WHILE;',period_ms=100,watchdog_ms=1000)
-        p['tasks'].append({'ob':35,'kind':'cyclic','period_ms':5,'priority':12,'watchdog_ms':1000,'networks':[{'language':'SCL','source':'DB1.Flag := TRUE;'}]})
+        # A delayed Windows worker may release OB35 before the first OB1.
+        # Only release the loop after OB1 has entered it, proving preemption.
+        p['tasks'].append({'ob':35,'kind':'cyclic','period_ms':5,'priority':12,'watchdog_ms':1000,'networks':[{'language':'SCL','source':'IF DB1.A > 0 THEN DB1.Flag := TRUE; END_IF;'}]})
         self.load(compile_project(p));self.runtime.command('RUN');s=wait_for(self.runtime,lambda s:values(s)['DB1.Flag']);self.assertEqual(s['state'],'RUN');self.assertGreater(values(s)['DB1.A'],0)
     def test_runtime_fault_is_contained_and_outputs_go_zero(self):
         p=simple('Motor := TRUE; DB1.A := 1 / DB1.A;');p['globals']=[{'name':'Motor','type':'BOOL','address':'%Q0.0','initial':False}]
