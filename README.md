@@ -2,9 +2,15 @@
 
 ## Windows-first PLC Studio
 
-A native **compile → load → RUN → monitor** workflow is now available.
-Double-click **Start-Studio.cmd** on Windows after installing Python 3.10+
-and Visual Studio 2022 C++ Build Tools (x64).
+An open-source **compile → load → RUN → monitor** workflow.
+Download the **SOFT-PLC-Studio-Windows-Portable** Actions artifact, extract
+the ZIPs, and double-click **Start-Studio.cmd** on Windows 10/11 x64.
+Python and portable GCC/MinGW-w64 are included: no Visual Studio or separate
+Python installation is required. The interface uses your existing browser.
+The compiler is unpacked on the first Compile and runs only during builds.
+
+SOFT-PLC uses the MIT license. Bundled tools retain their open-source
+licenses; see [component licenses and source links](THIRD-PARTY-NOTICES.md).
 
 - OB1 main task, startup OBs and periodic priority OBs such as OB35
 - Numbered DB addresses and separate FB instance DBs

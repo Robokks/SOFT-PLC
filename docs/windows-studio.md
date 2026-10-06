@@ -9,24 +9,52 @@ instruction sets are not compatible.
 
 ## Start on Windows
 
-Use 64-bit Windows 10/11, Python 3.10 or newer, and Visual Studio 2022 Build
-Tools with **Desktop development with C++**, including the MSVC x64 tools and
-Windows SDK. No Qt, Node, CMake or third-party Python packages are needed to
-use Studio. The compiler SDK is needed when compiling user programs, including
-when using prebuilt runtime tools.
+Use **64-bit Windows 10/11** and the **Windows Portable** download.
+The package includes application-local Python and an open-source GCC/MinGW-w64
+compiler. It requires no Visual Studio, Python installation, administrator
+access, Qt, Electron, Node.js runtime, or internet connection during use.
 
-1. Download/extract this branch or the `SOFT-PLC-Studio-Windows` GitHub Actions
-   artifact. Do not run directly inside the ZIP.
+1. Download the `SOFT-PLC-Studio-Windows-Portable` GitHub Actions artifact.
+   Extract the downloaded ZIP, then its contained Studio ZIP. Keep the entire
+   `SOFT-PLC` folder together in a writable location; do not run inside the ZIP.
 2. Double-click **Start-Studio.cmd**. Keep its console window open.
 3. Your browser opens the local engineering interface with the motor demo.
-4. Select **Compile → Load to CPU → RUN**.
+4. Select **Compile → Load to CPU → RUN**. The first compile unpacks the bundled
+   compiler and builds the tools; subsequent builds reuse them.
 5. Open **Online watch**. Write `TRUE` to `DB1.Start`, then observe
    `DB1.Run`, `Motor1.Ready`, `MotorOutput`, counters and network status.
 6. Write `TRUE` to `DB1.Stop` to release the latch, or press **STOP**.
 
-The launcher detects MSVC through `vswhere` and loads its x64 environment. If
-MSVC is installed in a custom unsupported location, start Studio from an
-**x64 Native Tools Command Prompt for VS 2022** instead.
+The native CPU is a separate C++ process. The compiler runs only during builds;
+it is not part of the scan loop. Most of the portable download consists of the
+compressed compiler payload, which expands on first use. The UI is plain
+HTML/CSS/JavaScript served by Python's standard library. Component licenses and
+corresponding source downloads are listed in `THIRD-PARTY-NOTICES.md`.
+
+### Working from a source checkout
+
+Developers can install Python 3.10+ and extract x64
+[w64devkit](https://github.com/skeeto/w64devkit/releases/tag/v2.10.0) anywhere.
+Set `SOFTPLC_TOOLCHAIN` to its root folder (containing `bin/g++.exe`), or put its
+`bin` folder on PATH. `SOFTPLC_COMPILER=mingw` explicitly disables MSVC fallback.
+The bundled compiler takes precedence over PATH when no override is set.
+
+The existing MSVC backend is optional: `SOFTPLC_COMPILER=msvc` selects it, using
+an existing Visual Studio Build Tools installation. Compiler tools are cached
+in separate folders, avoiding reuse across MSVC and MinGW.
+
+To assemble the self-contained portable ZIP on Windows:
+
+```powershell
+python tools/portable.py --prepare
+$env:SOFTPLC_COMPILER = "mingw"
+python -m unittest discover -s tests/studio -v
+python tools/package_studio.py --portable
+```
+
+Only `--prepare` downloads dependencies. It verifies pinned SHA-256 hashes from
+the upstream releases. Normal Studio startup and compilation use local files.
+The embedded Python path is isolated from installed Python packages.
 
 The default editable project is saved in `build/studio/workspace/project.json`.
 **Export** downloads a portable JSON copy. **Project settings** allows editing
@@ -48,7 +76,7 @@ flowchart TD
     L --> B["Existing parser and block binder"]
     S --> B
     B --> G["Native C++ code generation"]
-    N["C and C++ networks"] --> C["MSVC compiler and linker"]
+    N["C and C++ networks"] --> C["GCC or MSVC compiler and linker"]
     G --> C
     C --> D["Program DLL"]
     D --> R["Native runtime process"]
@@ -66,7 +94,7 @@ flowchart TD
 | Runtime | `apps/plc_runtime/main.cpp`: DLL loading, memory images, scheduler, STOP/RUN/FAULT, snapshots |
 | Engineering service | `tools/plc_studio.py`: localhost HTTP, compiler jobs and a private child runtime process |
 | User interface | `tools/studio/`: project tree, network editing, graphical ladder, DB editor, live watch |
-| Build orchestration | `tools/plc_build.py`: MSVC environment detection, tool builds and unique module builds |
+| Build orchestration | `tools/plc_build.py`: portable GCC / optional MSVC detection, tool builds and unique module builds |
 
 The compiler resolves symbolic tags once and generates direct operations on
 numeric tag IDs. User code is compiled into the DLL; the runtime does **not**
@@ -220,10 +248,12 @@ replacement. Failed compilation or failed loading preserves the previous
 loaded program. A load resets memory; online code-change migration is not
 implemented.
 
-The `.github/workflows/studio.yml` workflow builds and tests on Windows 2022
-with MSVC and on Ubuntu, runs existing core tests without Modbus dependencies,
-and exercises the engineering UI in Windows Edge. Successful Windows runs
-publish a source/tools ZIP and browser screenshots as Actions artifacts.
+The `.github/workflows/studio.yml` workflow tests GCC/MinGW and optional MSVC
+on Windows 2022, plus GCC on Ubuntu. The existing core tests run without
+Modbus dependencies. A separate Windows job extracts the final Portable ZIP
+to a path with spaces and runs its launcher in Edge with only Windows system
+directories on PATH, using bundled Python/GCC and disabling MSVC fallback.
+Successful runs publish the offline ZIP and browser screenshots as artifacts.
 The tests compile actual modules and exercise OB scheduling, all five language
 paths, instance isolation, FC reset behavior, DB aliases, native raw DB memory,
 online writes, watchdogs, faults, transactional loading and HTTP access checks.
