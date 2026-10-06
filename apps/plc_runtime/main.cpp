@@ -52,7 +52,7 @@ struct Module {
     explicit Module(const std::string& path) {
         if(!std::filesystem::path(reinterpret_cast<const char8_t*>(path.c_str())).is_absolute()) throw std::runtime_error("module path must be absolute");
 #if defined(_WIN32)
-        handle=LoadLibraryExW(std::filesystem::path(reinterpret_cast<const char8_t*>(path.c_str())).c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_DEFAULT_DIR);
+        handle=LoadLibraryExW(std::filesystem::path(reinterpret_cast<const char8_t*>(path.c_str())).c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
         auto getter=handle?reinterpret_cast<PlcProgramGetter>(GetProcAddress(static_cast<HMODULE>(handle),"softplc_program_v1")):nullptr;
 #else
         handle=dlopen(path.c_str(),RTLD_NOW|RTLD_LOCAL);
