@@ -360,6 +360,8 @@ class ServerWorker:
                     data.extend(chunk);last_byte = time.monotonic()
                 elif data and time.monotonic() - last_byte > link.get('timeout_ms', 500) / 1000:
                     self.error('Incomplete RTU request');data.clear()
+                if len(data) > 256:
+                    self.error('Oversized RTU frame');data.clear()
                 while len(data) >= 2:
                     function = data[1]
                     if function in (1, 2, 3, 4, 5, 6):
@@ -369,7 +371,14 @@ class ServerWorker:
                             break
                         size = 9 + data[6]
                     else:
-                        data.clear();self.error('Unsupported RTU function');break
+                        # Unknown function lengths are delimited by a quiet interval.
+                        if not chunk and len(data) >= 4:
+                            packet = bytes(data);data.clear()
+                            if packet[0] == link.get('unit', 1) and crc16(packet[:-2]) == struct.unpack('<H', packet[-2:])[0]:
+                                response = bytes([packet[0], function | 128, 1])
+                                port.write(response + struct.pack('<H', crc16(response)))
+                            self.error('Unsupported RTU function')
+                        break
                     if size > 256:
                         data.clear();break
                     if len(data) < size:

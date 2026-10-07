@@ -565,6 +565,10 @@ class ServerIOTests(unittest.TestCase):
                 reply = recv_exact(remote, 6, time.monotonic() + 2)
                 self.assertEqual(reply[:4], bytes.fromhex('01020101'))
                 self.assertEqual(crc16(reply[:-2]), struct.unpack('<H', reply[-2:])[0])
+                request = bytes.fromhex('0107')  # Unsupported function, valid RTU frame.
+                remote.sendall(request + struct.pack('<H', crc16(request)))
+                reply = recv_exact(remote, 5, time.monotonic() + 2)
+                self.assertEqual(reply[:3], bytes.fromhex('018701'))
             finally:
                 self.runtime.command('STOP');self.io.close();remote.close()
 
