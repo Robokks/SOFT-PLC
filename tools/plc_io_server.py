@@ -22,11 +22,12 @@ class ServerWorker:
         self.link, self.runtime = link, runtime
         self.lock = threading.RLock()
         self.stop_event = threading.Event()
+        self.ready = threading.Event()
         self.thread = threading.Thread(target=self.run, name='io-server-' + link['name'], daemon=True)
         self.peers, self.owners, self.retired = {}, {}, []
         self.sockets = set()
         self.server = None
-        self.info = {'name': link['name'], 'protocol': link['protocol'], 'role': 'server', 'state': 'listening',
+        self.info = {'name': link['name'], 'protocol': link['protocol'], 'role': 'server', 'state': 'connecting',
                      'clients': 0, 'exchanges': 0, 'errors': 0, 'last_error': '', 'seq': 0, 'ack': 0,
                      'latency_ms': 0, 'last_good': None}
         self.input_by_id = {row['_id']: row for row in link.get('inputs', [])}
@@ -351,6 +352,9 @@ class ServerWorker:
         port = serial.Serial(link.get('serial_port', 'COM1'), baudrate=link.get('baudrate', 19200), bytesize=8,
                              parity=link.get('parity', 'E'), stopbits=link.get('stopbits', 1), timeout=.05,
                              write_timeout=link.get('timeout_ms', 500) / 1000)
+        with self.lock:
+            self.info['state'] = 'listening'
+        self.ready.set()
         data = bytearray()
         last_byte = time.monotonic()
         try:
@@ -409,6 +413,9 @@ class ServerWorker:
             if protocol != 'grpc':
                 listener_thread = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval': .02}, daemon=True)
                 listener_thread.start()
+            with self.lock:
+                self.info['state'] = 'listening'
+            self.ready.set()
             while not self.stop_event.wait(.02):
                 with self.lock:
                     self.expire()

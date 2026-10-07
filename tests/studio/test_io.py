@@ -421,7 +421,7 @@ class ServerIOTests(unittest.TestCase):
 
     def apply(self, links):
         self.io.apply(links, self.runtime.command('STATUS'))
-        until(lambda: all(worker.server is not None or worker.link['protocol'] == 'modbus_rtu' for worker in self.io.workers))
+        until(lambda: all(worker.ready.is_set() for worker in self.io.workers))
 
     def test_multi_peer_tcp_udp_grpc_servers(self):
         from plc_io import make_client
@@ -531,7 +531,7 @@ class ServerIOTests(unittest.TestCase):
         link['outputs'] = [{'tag': 'MotorOutput', 'area': 'discrete', 'address': 0, 'datatype': 'bool'}]
         try:
             self.io.apply([link], self.runtime.command('STATUS'))
-            time.sleep(.1)
+            self.assertTrue(self.io.workers[0].ready.wait(3), self.io.status())
             request = bytes.fromhex('01050000ff00')
             os.write(master, request + struct.pack('<H', crc16(request)))
             data = bytearray();end = time.monotonic() + 2
@@ -553,6 +553,7 @@ class ServerIOTests(unittest.TestCase):
         with patch('serial.Serial', lambda port, **kw: serial.serial_for_url(f'socket://127.0.0.1:{listener.getsockname()[1]}', **kw)):
             self.io.apply([link], self.runtime.command('STATUS'))
             remote, _ = listener.accept()
+            self.assertTrue(self.io.workers[0].ready.wait(3), self.io.status())
             try:
                 request = bytes.fromhex('01050000ff00')
                 remote.sendall(request + struct.pack('<H', crc16(request)))
