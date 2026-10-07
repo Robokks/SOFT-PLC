@@ -1,0 +1,9 @@
+syntax = "proto3";
+package softplc.io.v1;
+import "google/protobuf/wrappers.proto";
+
+// BytesValue.value contains the UTF-8 JSON envelope in docs/IO.md.
+// Sharing the envelope with TCP/UDP preserves integer precision in every language.
+service IO {
+  rpc Exchange(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
+}

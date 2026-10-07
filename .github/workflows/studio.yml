@@ -20,6 +20,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Install I/O wheels
+        run: 'python -m pip install --only-binary=:all: -r tools/requirements-io.txt'
       - name: Compile and exercise native PLC modules
         run: python -m unittest discover -s tests/studio -v
       - name: Build existing core tests without fieldbus dependencies
@@ -39,7 +41,9 @@ jobs:
           python-version: '3.13'
       - name: Prepare pinned open-source compiler and Python
         run: python tools/portable.py --prepare
-      - name: Exercise all five PLC languages with GCC
+      - name: Install I/O test dependencies
+        run: 'python -m pip install --only-binary=:all: -r tools/requirements-io.txt'
+      - name: Exercise all five PLC languages and I/O clients with GCC
         run: python -m unittest discover -s tests/studio -v
       - name: Package offline Windows Studio
         run: python tools/package_studio.py --portable
@@ -55,6 +59,11 @@ jobs:
           Expand-Archive dist/SOFT-PLC-Studio-Windows-Portable.zip $destination
           "SOFTPLC_TEST_ROOT=$destination\SOFT-PLC" >> $env:GITHUB_ENV
           "SOFTPLC_TEST_PORTABLE=1" >> $env:GITHUB_ENV
+      - name: Exercise bundled gRPC and serial I/O dependencies
+        shell: pwsh
+        run: |
+          & "$env:SOFTPLC_TEST_ROOT\portable\python\python.exe" -m unittest discover -s "$env:SOFTPLC_TEST_ROOT\tests\studio" -p test_io.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Exercise the packaged launcher with no external Python or compiler on PATH
         run: node tests/studio/browser_smoke.cjs
       - uses: actions/upload-artifact@v4

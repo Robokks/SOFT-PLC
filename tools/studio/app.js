@@ -16,7 +16,7 @@ async function save(){await api('project',{project});dirty=false;$('editState').
 async function action(name){try{if(name==='build'){await save();showTab('log');}await api(name,{});if(name==='load')notice('Program loaded in STOP. Select RUN to execute.');if(name==='run')notice('CPU is running. Online values and network status refresh automatically.');if(name==='stop')notice('CPU stopped. Process outputs are zero.');await poll();}catch(e){notice(e.message,true);}}
 function currentBlock(){return project[selected.kind][selected.index];}
 function blockName(block){return block.name||'OB'+block.ob;}
-function showTab(tab){activeTab=tab;document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('hidden',p.id!==tab));if(tab==='project')$('projectJson').value=JSON.stringify(project,null,2);if(tab==='data')renderData();}
+function showTab(tab){activeTab=tab;document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('hidden',p.id!==tab));if(tab==='project')$('projectJson').value=JSON.stringify(project,null,2);if(tab==='data')renderData();if(tab==='io')renderIo();}
 function choose(kind,index){selected={kind,index};renderTree();renderNetworks();showTab('networks');}
 function renderTree(){const root=$('tree');root.replaceChildren();for(const[kind,label,icon]of[['tasks','ORGANIZATION BLOCKS','OB'],['blocks','PROGRAM BLOCKS','FB']]){root.append(element('div',{class:'treeGroup',text:label}));project[kind].forEach((b,i)=>{const row=button('',()=>choose(kind,i),'treeItem'+(selected.kind===kind&&selected.index===i?' active':''));row.append(element('span',{class:'blockIcon',text:b.kind==='FC'?'FC':kind==='tasks'?'OB':'FB'}),element('span',{text:blockName(b)}),element('small',{text:kind==='tasks'?(b.kind==='startup'?'startup':(b.period_ms||10)+' ms'):b.kind}));root.append(row);});}root.append(element('div',{class:'treeGroup',text:'DATA BLOCKS'}));for(const db of project.data_blocks||[])root.append(button('DB'+db.number+' · '+(db.name||'Global data'),()=>showTab('data'),'treeItem'));for(const inst of project.instances||[])root.append(button('DB'+inst.db+' · '+inst.name,()=>showTab('data'),'treeItem'));$('projectName').textContent=project.name;}
 function renderNetworks(){const block=currentBlock();if(!block)return;$('blockTitle').textContent=blockName(block);$('blockDescription').textContent=selected.kind==='tasks'?({main:'Main cyclic program',cyclic:'Periodic OB with priority scheduling',startup:'Executes once on each STOP → RUN transition'}[block.kind]):(block.kind==='FB'?'Function block · state belongs to its instance DB':'Function · temporary values reset on each call');const settings=$('taskSettings');settings.replaceChildren();if(selected.kind==='tasks'){const row=element('div',{class:'settings'});for(const[key,label,def]of[['period_ms','Cycle / period (ms)',10],['priority','Priority',block.kind==='main'?1:12],['watchdog_ms','Watchdog (ms)',1000]])row.append(element('label',{text:label},[input(block[key]??def,v=>{block[key]=v;renderTree();},'number')]));settings.append(row);}
@@ -37,7 +37,7 @@ $('loadedBuild').textContent=`${snapshot.program} · Loaded build ${snapshot.bui
 const cards=element('div',{class:'diagGrid'});for(const task of snapshot.tasks||[])cards.append(element('div',{class:'diagCard'},[element('strong',{text:`${task.name} · ${task.period_us/1000} ms · priority ${task.priority}`}),element('span',{text:`Scans ${task.cycles}    Last ${task.last_us} µs`}),element('span',{text:`Max ${task.max_us} µs    Overruns ${task.overruns}`}),element('span',{text:`Missed releases ${task.missed}    Jitter ${task.jitter_us} µs`})]));$('diagnostics').replaceChildren(cards);}
 function updateLive(){if(!latest||!project)return;const s=latest.runtime,b=latest.build,valid=!dirty&&b.source_matches&&b.manifest?.build_id===s.build_id;for(const card of document.querySelectorAll('.network')){const n=valid?b.manifest.networks.find(x=>x.block===card.dataset.block&&x.index===Number(card.dataset.index)+1):null;const traces=n?(s.networks||[]).filter(x=>x.id===n.id):[];const span=card.querySelector('.trace'),drop=card.querySelector('.scopeSelect'),key=card.dataset.block+':'+card.dataset.index;
 const scopes=traces.map(t=>t.scope);if(drop.dataset.scopes!==JSON.stringify(scopes)){drop.replaceChildren(...scopes.map(scope=>element('option',{value:scope,text:scope})));drop.dataset.scopes=JSON.stringify(scopes);}drop.classList.toggle('hidden',scopes.length<2);const chosen=scopeChoices.get(key);if(chosen&&scopes.includes(chosen))drop.value=chosen;const trace=traces.find(t=>t.scope===drop.value)||traces[0];span.textContent=trace?`${trace.scope} · ${trace.count} visits · ${trace.power?'power ON':'power OFF'}`:valid?'not executed':'offline / code changed';span.classList.toggle('on',!!trace?.power&&s.state==='RUN');const svg=card.querySelector('.ladderDrawing');if(svg){const net=currentBlock()?.networks?.[Number(card.dataset.index)];if(net){const isOn=!!trace?.power&&s.state==='RUN';if(svg.dataset.power!==String(isOn)){const next=ladderSvg(net,isOn);next.dataset.power=String(isOn);svg.replaceWith(next);}}}}}
-async function poll(){try{latest=await api('status');const s=latest.runtime,b=latest.build;$('cpuState').textContent=s.state;$('cpuState').className='state '+s.state;$('connection').textContent=s.program?'CPU · '+s.program:'Local CPU · no program loaded';$('buildLog').textContent=b.log||'No build yet.';$('buildState').textContent=b.busy?'Compiling…':b.error?'Build failed':b.ready?'Build ready · '+b.manifest.build_id:'Ready to compile';$('build').disabled=b.busy;$('load').disabled=b.busy||!b.ready||dirty||!b.source_matches||s.state==='RUN';$('run').disabled=s.state!=='STOP';$('stop').disabled=s.state!=='RUN';$('step').disabled=s.state!=='STOP';$('reset').disabled=!['STOP','FAULT'].includes(s.state);if(previousBusy&&!b.busy)notice(b.error?'Build failed: '+b.error:'Build succeeded. STOP the CPU if necessary, then Load to CPU.',!!b.error);previousBusy=b.busy;if(s.fault)notice(s.fault,true);renderWatch(s);updateLive();}catch(e){$('connection').textContent='Connection unavailable';notice(e.message,true);}}
+async function poll(){try{latest=await api('status');const s=latest.runtime,b=latest.build;$('cpuState').textContent=s.state;$('cpuState').className='state '+s.state;$('connection').textContent=s.program?'CPU · '+s.program:'Local CPU · no program loaded';$('buildLog').textContent=b.log||'No build yet.';$('buildState').textContent=b.busy?'Compiling…':b.error?'Build failed':b.ready?'Build ready · '+b.manifest.build_id:'Ready to compile';$('build').disabled=b.busy;$('load').disabled=b.busy||!b.ready||dirty||!b.source_matches||s.state==='RUN';$('run').disabled=s.state!=='STOP';$('stop').disabled=s.state!=='RUN';$('step').disabled=s.state!=='STOP';$('reset').disabled=!['STOP','FAULT'].includes(s.state);if(previousBusy&&!b.busy)notice(b.error?'Build failed: '+b.error:'Build succeeded. STOP the CPU if necessary, then Load to CPU.',!!b.error);previousBusy=b.busy;if(s.fault)notice(s.fault,true);renderWatch(s);renderIoStatus();updateLive();}catch(e){$('connection').textContent='Connection unavailable';notice(e.message,true);}}
 $('save').onclick=()=>save().catch(e=>notice(e.message,true));for(const id of ['build','load','run','stop','step'])$(id).onclick=()=>action(id);$('reset').onclick=()=>{if(confirm('Reset all DB and instance values to their configured initial values?'))action('reset');};document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));$('filter').oninput=()=>latest&&renderWatch(latest.runtime);
 $('addNetwork').onclick=()=>{const b=currentBlock();b.networks??=[];b.networks.push({title:'New network',language:'SCL',source:'// Write SCL here\n'});markDirty();renderNetworks();};
 $('addOb').onclick=()=>{const v=prompt('OB number (1 = main, 35 = cyclic, 100 = startup):','36');if(v===null)return;const ob=Number(v);if(!Number.isInteger(ob)||ob<1||project.tasks.some(t=>t.ob===ob))return notice('Choose an unused positive OB number',true);const kind=ob===1?'main':ob===100?'startup':'cyclic';project.tasks.push({ob,kind,period_ms:100,priority:12,watchdog_ms:1000,networks:[]});markDirty();choose('tasks',project.tasks.length-1);};
@@ -48,3 +48,77 @@ $('applyJson').onclick=()=>{try{const p=JSON.parse($('projectJson').value);if(p.
 $('export').onclick=()=>{const url=URL.createObjectURL(new Blob([JSON.stringify(project,null,2)],{type:'application/json'}));const a=element('a',{href:url,download:'softplc-project.json'});a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
 window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue='';}});
 (async()=>{try{const r=await api('session');project=r.project;project.blocks??=[];selected.index=Math.max(0,project.tasks.findIndex(t=>t.ob===1));renderTree();renderNetworks();await poll();setInterval(()=>poll(),500);}catch(e){notice(e.message,true);}})();
+
+const ioProtocols=[['tcp','TCP handshake'],['udp','UDP handshake'],['grpc','gRPC handshake'],['modbus_tcp','Modbus TCP'],['modbus_rtu','Modbus serial RTU']];
+function ioField(parent,label,value,change,type='text') {
+    const field=input(value,change,type);field.setAttribute('aria-label',label);
+    parent.append(element('label',{text:label},[field]));
+}
+function renderIo() {
+    const root=$('ioLinks');root.replaceChildren();
+    (project.io_links||[]).forEach((link,index)=>{
+        const modbus=link.protocol.startsWith('modbus');
+        const card=element('article',{class:'dbCard ioCard'}), settings=element('div',{class:'ioSettings'});
+        const enabled=element('input',{type:'checkbox',checked:link.enabled,onchange:e=>{link.enabled=e.target.checked;markDirty();}});
+        card.append(element('div',{class:'sectionHead'},[element('label',{text:'Enabled '},[enabled]),button('Remove',()=>{project.io_links.splice(index,1);markDirty();renderIo();})]));
+        ioField(settings,'Connection name',link.name,v=>link.name=v);
+        settings.append(element('label',{text:'Role'},[select([['client','Client / master'],['server','Server / slave']],link.role||'client',v=>{link.role=v;for(const direction of ['inputs','outputs'])for(const row of link[direction]||[]){const writable=direction===(v==='server'?'inputs':'outputs');if(writable&&row.area==='discrete')row.area='coil';else if(writable&&row.area==='input')row.area='holding';else if(!writable&&row.area==='coil')row.area='discrete';else if(!writable&&row.area==='holding')row.area='input';}markDirty();renderIo();})]));
+        settings.append(element('label',{text:'Protocol'},[select(ioProtocols,link.protocol,v=>{link.protocol=v;link.port={tcp:15000,udp:15001,grpc:50051,modbus_tcp:502,modbus_rtu:502}[v];markDirty();renderIo();})]));
+        if(link.protocol==='modbus_rtu') {
+            ioField(settings,'Serial port',link.serial_port||'COM3',v=>link.serial_port=v);
+            ioField(settings,'Baud rate',link.baudrate??19200,v=>link.baudrate=v,'number');
+            settings.append(element('label',{text:'Parity'},[select(['E','N','O'],link.parity||'E',v=>{link.parity=v;markDirty();})]));
+            ioField(settings,'Stop bits',link.stopbits??1,v=>link.stopbits=v,'number');
+        } else {
+            ioField(settings,link.role==='server'?'Listen IP':'Device IP',link.host||'127.0.0.1',v=>link.host=v);
+            ioField(settings,'Port',link.port??50051,v=>link.port=v,'number');
+        }
+        if(link.role==='server'){ioField(settings,'Peer watchdog (ms)',link.lease_ms??1000,v=>link.lease_ms=v,'number');if(link.protocol!=='modbus_rtu')ioField(settings,'Maximum clients',link.max_clients??16,v=>link.max_clients=v,'number');}
+        if(modbus)ioField(settings,'Unit ID',link.unit??1,v=>link.unit=v,'number');
+        ioField(settings,'Cycle (ms)',link.cycle_ms??20,v=>link.cycle_ms=v,'number');
+        ioField(settings,'Exchange timeout (ms)',link.timeout_ms??500,v=>link.timeout_ms=v,'number');
+        settings.append(element('label',{text:'On communication failure'},[select([['fault','Fault CPU'],['zero','Zero mapped inputs'],['hold','Hold last inputs']],link.fail_policy||'fault',v=>{link.fail_policy=v;markDirty();})]));
+        card.append(settings);
+        if(link.protocol==='grpc') {
+            card.append(element('label',{text:'Use TLS '},[element('input',{type:'checkbox',checked:!!link.tls,onchange:e=>{link.tls=e.target.checked;markDirty();renderIo();}})]));
+            if(link.tls){if(link.role==='server'){ioField(card,'Server certificate file',link.cert_file||'',v=>link.cert_file=v);ioField(card,'Server private key file',link.key_file||'',v=>link.key_file=v);}else ioField(card,'CA certificate file (blank = system gRPC roots)',link.ca_file||'',v=>link.ca_file=v);}
+        }
+        for(const direction of ['inputs','outputs']) {
+            card.append(element('h3',{text:direction==='inputs'?'Device → PLC inputs':'PLC → device outputs'}));
+            const table=element('table'), head=element('tr');
+            for(const title of (modbus?['PLC tag / DB address','Area','Address (zero based)','Data type','Word order','']:['PLC tag / DB address','Device channel','']))head.append(element('th',{text:title}));
+            table.append(head);
+            (link[direction]||[]).forEach((row,i)=>{
+                const tr=element('tr');tr.append(element('td',{},[input(row.tag,v=>row.tag=v)]));
+                if(modbus) {
+                    const writable=direction===(link.role==='server'?'inputs':'outputs');const areas=writable?['coil','holding']:['coil','discrete','holding','input'];
+                    tr.append(element('td',{},[select(areas,row.area||'holding',v=>{row.area=v;if(v==='coil'||v==='discrete')row.datatype='bool';markDirty();renderIo();})]),element('td',{},[input(row.address??0,v=>row.address=v,'number')]),element('td',{},[select(['bool','uint16','int16','uint32','int32','float32','float64','int64'],row.datatype||'uint16',v=>{row.datatype=v;markDirty();})]),element('td',{},[select([['high_low','High word first'],['low_high','Low word first']],row.word_order||'high_low',v=>{row.word_order=v;markDirty();})]));
+                } else tr.append(element('td',{},[input(row.channel||'',v=>row.channel=v)]));
+                tr.append(element('td',{},[button('×',()=>{link[direction].splice(i,1);markDirty();renderIo();})]));table.append(tr);
+            });
+            card.append(element('div',{class:'tableWrap'},[table]),button('+ Mapping',()=>{link[direction]??=[];link[direction].push({tag:'',channel:'channel'+link[direction].length,area:'holding',address:0,datatype:'uint16'});markDirty();renderIo();}));
+        }
+        if(modbus) {
+            card.append(element('p',{class:'hint',text:'Coil/discrete mappings use BOOL. Registers use big-endian bytes with selectable word order. Standard device replies confirm each transaction.'}));
+            card.append(element('label',{text:'Additional application handshake registers '},[element('input',{type:'checkbox',checked:!!link.handshake,onchange:e=>{if(e.target.checked)link.handshake={request:100,ack:101,ready:102};else delete link.handshake;markDirty();renderIo();}})]));
+            if(link.handshake){const hs=element('div',{class:'ioSettings'});for(const key of ['request','ack','ready'])ioField(hs,key+' holding register',link.handshake[key]??'',v=>{if(v==='')delete link.handshake[key];else link.handshake[key]=Number(v);});card.append(hs);}
+        }
+        root.append(card);
+    });
+    if(!root.children.length)root.append(element('p',{class:'hint',text:'No external I/O configured. Add a connection to map device channels to PLC symbols.'}));
+    renderIoStatus();
+}
+function renderIoStatus() {
+    if(!latest)return;
+    $('applyIo').disabled=latest.runtime.state!=='STOP';$('disconnectIo').disabled=latest.runtime.state==='RUN';
+    const grid=element('div',{class:'diagGrid'});
+    for(const link of latest.io||[])grid.append(element('div',{class:'diagCard'},[element('strong',{text:link.name+' · '+link.protocol+' '+(link.role||'client')+' · '+link.state}),element('span',{text:`Peers ${link.clients??1} · Exchanges ${link.exchanges} · Errors ${link.errors} · Seq / Ack ${link.seq} / ${link.ack}`}),element('span',{text:`Round trip ${link.latency_ms} ms · Last good ${link.age_ms===null?'never':link.age_ms+' ms ago'}`}),element('span',{text:link.last_error||'Handshake healthy'})]));
+    $('ioStatus').replaceChildren(grid);
+}
+$('addIo').onclick=()=>{
+    project.io_links??=[];let number=project.io_links.length+1;while(project.io_links.some(l=>l.name==='IO'+number))number++;
+    project.io_links.push({name:'IO'+number,enabled:true,role:'client',protocol:'tcp',host:'127.0.0.1',port:15000,cycle_ms:20,timeout_ms:500,fail_policy:'fault',inputs:[{tag:'DB1.Start',channel:'start',area:'discrete',address:0,datatype:'bool'}],outputs:[{tag:'MotorOutput',channel:'motor',area:'coil',address:0,datatype:'bool'}]});
+    markDirty();renderIo();
+};
+$('applyIo').onclick=async()=>{try{await save();await api('io_apply',{});notice('I/O connections applied. Check live status before RUN.');await poll();}catch(e){notice(e.message,true);}};
+$('disconnectIo').onclick=async()=>{try{await api('io_disconnect',{});notice('I/O connections disconnected.');await poll();}catch(e){notice(e.message,true);}};

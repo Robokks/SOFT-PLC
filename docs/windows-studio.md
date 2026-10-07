@@ -48,12 +48,13 @@ To assemble the self-contained portable ZIP on Windows:
 ```powershell
 python tools/portable.py --prepare
 $env:SOFTPLC_COMPILER = "mingw"
+python -m pip install --only-binary=:all: -r tools/requirements-io.txt
 python -m unittest discover -s tests/studio -v
 python tools/package_studio.py --portable
 ```
 
 Only `--prepare` downloads dependencies. It verifies pinned SHA-256 hashes from
-the upstream releases. Normal Studio startup and compilation use local files.
+the upstream compiler/Python releases and installs pinned I/O wheels. Normal Studio startup and compilation use local files.
 The embedded Python path is isolated from installed Python packages.
 
 The default editable project is saved in `build/studio/workspace/project.json`.
@@ -132,8 +133,8 @@ interval and OS scheduling delays mean configured periods are targets, not
 hardware timing guarantees. Native C/C++ code must return promptly or call
 `ctx->api->checkpoint(ctx)` in longer loops. An unresponsive native block
 cannot be safely preempted inside the process; the Studio supervisor stops an
-unresponsive runtime process after its command timeout. This release does
-not connect that runtime to physical I/O.
+unresponsive runtime process after its command timeout. External I/O uses
+separate workers and remote-device watchdogs; see [I/O behavior](IO.md).
 
 ## DBs, FBs and FCs
 
@@ -267,14 +268,14 @@ ctest --test-dir build/cmake -C Debug --output-on-failure
 ```
 
 Keep `SOFTPLC_ENABLE_MODBUS=ON` for the original fieldbus drivers. The new
-native runtime currently uses its in-memory I/Q/M images; those drivers still
-need an adapter and engineering configuration to connect to it. Existing
-POSIX socket/PTY integration tests are gated off on Windows.
+native runtime now connects its tags and I/Q/M/DB images through the Studio
+I/O bridge without requiring libmodbus. Both client and server roles are
+supported. Physical adapters still need commissioning; the Windows tests
+use virtual serial transports and Linux additionally tests OS PTYs.
 
 The Linux module loader and build path are present for portability testing
 (`python3 tools/plc_studio.py`, GCC; `.so` instead of `.dll`). Windows remains
-the first user-facing target; Linux real-time deployment and physical I/O
-integration are later phases.
+the first user-facing target; Linux real-time deployment is a later phase.
 
 ## Reference model
 
@@ -282,3 +283,9 @@ The organization-block terminology follows Siemens' public documentation:
 [OB1 cyclic program](https://docs.tia.siemens.cloud/r/en-us/v21/organization-blocks-s7-300-s7-400/cyclic-program-ob-1-s7-300-s7-400)
 and [cyclic interrupt OBs](https://docs.tia.siemens.cloud/r/en-us/v21/organization-blocks-s7-300-s7-400/cyclic-interrupt-organization-blocks-ob-30-to-ob-38-s7-300-s7-400).
 Windows module loading uses the [Microsoft runtime linking APIs](https://learn.microsoft.com/en-us/windows/win32/dlls/run-time-dynamic-linking).
+
+## External I/O
+
+Use the **I/O connections** tab for TCP, UDP, gRPC, Modbus TCP and serial RTU.
+See [configuration, mappings, handshakes and tests](IO.md). Dependencies for
+gRPC and serial are already included in the Portable ZIP.

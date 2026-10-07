@@ -17,12 +17,15 @@ licenses; see [component licenses and source links](THIRD-PARTY-NOTICES.md).
 - FB/FC calls in ordered networks
 - Graphical Ladder, STL and SCL subsets, plus native C17/C++20 networks
 - Compiled DLL loading, STOP/RUN/FAULT, live tag writes and network monitoring
+- TCP, UDP and gRPC I/O handshakes; Modbus TCP and serial RTU
+- Simultaneous clients and servers, multiple peers and per-input writer ownership
+- I/O tag mapping, connection diagnostics and communication failure policies
 
 See **[Windows setup, architecture and supported language scope](docs/windows-studio.md)**.
 Start with [`examples/windows_demo/project.json`](examples/windows_demo/project.json).
 This is a custom soft PLC inspired by Siemens block organization, not a
-Siemens binary-compatible or hard-real-time PLC. The new native runtime uses
-memory I/O; connecting the existing Modbus drivers is a later integration.
+Siemens binary-compatible or hard-real-time PLC. See **[I/O setup, Modbus
+register mapping and handshake protocol](docs/IO.md)** for external devices.
 
 ## Original interpreted runtime
 

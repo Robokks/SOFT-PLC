@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import urllib.request
 import zipfile
@@ -86,8 +87,12 @@ def prepare():
             if Path(entry.filename).name != entry.filename:
                 raise RuntimeError('Unexpected embedded Python archive path')
             (target / entry.filename).write_bytes(package.read(entry))
-    # Isolated from system Python and site-packages; only our tools and stdlib.
-    (target / 'python313._pth').write_text('python313.zip\n.\n../../tools\n', encoding='utf-8')
+    # Keep bundled I/O wheels isolated from all system Python installations.
+    subprocess.run([sys.executable, '-m', 'pip', 'install', '--only-binary=:all:',
+                    '--upgrade', '--target', str(target / 'site-packages'),
+                    '-r', str(ROOT / 'tools/requirements-io.txt')], check=True)
+    (target / 'python313._pth').write_text('python313.zip\n.\nsite-packages\n../../tools\n', encoding='utf-8')
+    subprocess.run([str(target / 'python.exe'), '-c', 'import grpc, serial; from google.protobuf.wrappers_pb2 import BytesValue'], check=True)
     ensure_compiler()
     print('Portable GCC and embedded Python are ready.', flush=True)
 
