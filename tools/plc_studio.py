@@ -1,4 +1,4 @@
-"""Loopback-only engineering server. No external Python packages are required."""
+"""Loopback-only engineering server. Optional I/O clients run outside the PLC scan thread."""
 from __future__ import annotations
 import argparse
 import atexit
@@ -14,6 +14,7 @@ import time
 import webbrowser
 from plc_build import ROOT, BUILD, build_tools, compile_project
 from plc_project import prepare, ProjectError
+from plc_io import IOManager, validate_links
 
 class RuntimeProcess:
     def __init__(self):
@@ -56,11 +57,13 @@ class Studio:
     def __init__(self, path):
         self.path=path;self.project=json.loads(path.read_text(encoding='utf-8'));self.token=secrets.token_urlsafe(32)
         self.lock=threading.RLock();self.runtime=RuntimeProcess();self.result=None;self.busy=False;self.build_log='';self.build_error='';self.built_source=None
-        atexit.register(self.runtime.close)
+        self.io=IOManager(self.runtime)
+        atexit.register(self.close)
     @staticmethod
-    def canonical(project):return json.dumps(project,sort_keys=True,separators=(',',':'))
+    def canonical(project):return json.dumps({k:v for k,v in project.items() if k != 'io_links'},sort_keys=True,separators=(',',':'))
     def save(self, project):
         prepare(project)
+        validate_links(project.get('io_links', []))
         with self.lock:
             self.project=copy.deepcopy(project)
             self.path.parent.mkdir(parents=True,exist_ok=True)
@@ -83,7 +86,7 @@ class Studio:
         try:snapshot=self.runtime.command('STATUS')
         except ProjectError as e:snapshot={'state':'DISCONNECTED','fault':str(e)}
         with self.lock:
-            return {'ok':True,'runtime':snapshot,'build':{'busy':self.busy,'error':self.build_error,'log':self.build_log,'ready':bool(self.result),'source_matches':bool(self.result and self.built_source==self.canonical(self.project)),'manifest':self.result['manifest'] if self.result else None}}
+            return {'ok':True,'runtime':snapshot,'io':self.io.status(),'build':{'busy':self.busy,'error':self.build_error,'log':self.build_log,'ready':bool(self.result),'source_matches':bool(self.result and self.built_source==self.canonical(self.project)),'manifest':self.result['manifest'] if self.result else None}}
     def action(self, action, data):
         if action=='project':self.save(data['project']);return {'ok':True}
         if action=='build':self.build();return {'ok':True}
@@ -92,8 +95,20 @@ class Studio:
                 if not self.result or self.busy:raise ProjectError('Build a program successfully first')
                 if self.built_source!=self.canonical(self.project):raise ProjectError('Project changed since compilation. Build again before loading.')
                 result=self.result
-            self.runtime.ensure(result['runtime']);return self.runtime.command('LOAD\t'+result['module'])
-        if action in ('run','stop','step','reset'):return self.runtime.command(action.upper())
+            if self.runtime.command('STATUS').get('state')=='RUN':raise ProjectError('STOP before loading a program')
+            with self.lock:
+                self.io.close()
+                self.runtime.ensure(result['runtime']);return self.runtime.command('LOAD\t'+result['module'])
+        if action in ('run','stop','step','reset'):
+            with self.lock:return self.runtime.command(action.upper())
+        if action=='io_apply':
+            with self.lock:self.io.apply(self.project.get('io_links', []), self.runtime.command('STATUS'))
+            return {'ok':True}
+        if action=='io_disconnect':
+            with self.lock:
+                if self.runtime.command('STATUS').get('state')=='RUN':raise ProjectError('STOP before disconnecting I/O')
+                self.io.close()
+            return {'ok':True}
         if action=='write':
             ident=data.get('id');value=data.get('value')
             if isinstance(ident,bool) or not isinstance(ident,int) or not 0<=ident<10000:raise ProjectError('Invalid tag ID')
@@ -101,6 +116,13 @@ class Studio:
             if not isinstance(value,(str,int,float)) or not str(value) or any(c.isspace() for c in str(value)):raise ProjectError('Enter one numeric value')
             return self.runtime.command(f'SET\t{ident}\t{value}')
         raise ProjectError('Unknown action')
+
+    def close(self):
+        try:
+            if self.runtime.process and self.runtime.process.poll() is None:self.runtime.command('STOP')
+        except ProjectError:pass
+        try:self.io.close()
+        finally:self.runtime.close()
 
 def handler_for(studio):
     class Handler(BaseHTTPRequestHandler):
@@ -149,5 +171,5 @@ def main():
     if not args.no_browser:webbrowser.open(url)
     try:server.serve_forever()
     except KeyboardInterrupt:pass
-    finally:server.server_close();studio.runtime.close()
+    finally:server.server_close();studio.close()
 if __name__=='__main__':main()

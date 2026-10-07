@@ -287,7 +287,7 @@ class Frontend:
         dispatch='\n'.join(('IF' if i==0 else 'ELSIF')+f' __plc_dispatch = {t["ob"]} THEN\nOB{t["ob"]}();' for i,t in enumerate(tasks))+'\nEND_IF;'
         declarations=['__plc_dispatch : DINT;']+globals+[f'{m} : BOOL;' for m in self.markers]+instance_decls
         source='\n\n'.join(db_source+pous)+ '\nPROGRAM CompiledProject\nVAR\n'+'\n'.join(declarations)+'\nEND_VAR\n'+dispatch+'\nEND_PROGRAM\n'
-        build_id=hashlib.sha256(json.dumps(p,sort_keys=True,separators=(',',':')).encode()).hexdigest()[:16]
+        build_id=hashlib.sha256(json.dumps({k:v for k,v in p.items() if k != 'io_links'},sort_keys=True,separators=(',',':')).encode()).hexdigest()[:16]
         return Prepared(p,source,self.networks,self.native,self.fields,self.instances,build_id)
 
 def prepare(project):

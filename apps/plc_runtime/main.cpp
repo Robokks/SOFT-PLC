@@ -143,9 +143,9 @@ struct Trace {uint64_t count=0;bool power=false;};
 struct Runtime {
     std::recursive_mutex mutex;std::atomic<bool> cancel{false};std::unique_ptr<Module> module;std::unique_ptr<Memory> memory;
     std::vector<TaskState> tasks;std::map<std::pair<uint32_t,std::string>,Trace> traces;
-    std::string state="EMPTY",error;bool startupPending=false;int timeTag=-1;std::vector<size_t> stack;
+    uint64_t ioEpoch=0;std::string state="EMPTY",error;bool startupPending=false;int timeTag=-1;std::vector<size_t> stack;
     static Runtime& self(PlcContext* c){return *static_cast<Runtime*>(c->user);}
-    void fault(const std::string& message){if(error.empty())error=message;state="FAULT";cancel=true;if(memory)memory->safeOutputs();}
+    void fault(const std::string& message){if(state!="FAULT")++ioEpoch;if(error.empty())error=message;state="FAULT";cancel=true;if(memory)memory->safeOutputs();}
     template<class F> static int32_t protect(PlcContext* c,F fn){try{fn(self(c));return 0;}catch(const std::exception& e){self(c).fault(e.what());return -1;}}
     static const PlcHostApi api;
 
@@ -160,11 +160,11 @@ struct Runtime {
             next.push_back(TaskState{&t});
         }
         if(mainCount!=1)throw std::runtime_error("exactly one main OB1 is required");
-        memory.reset();module=std::move(candidate);memory=std::move(mem);tasks=std::move(next);traces.clear();stack.clear();
+        ++ioEpoch;memory.reset();module=std::move(candidate);memory=std::move(mem);tasks=std::move(next);traces.clear();stack.clear();
         auto it=memory->names.find("System.CycleTime");timeTag=it==memory->names.end()?-1:int(it->second);error.clear();state="STOP";cancel=false;memory->safeOutputs();
     }
-    void start(){if(state!="STOP")throw std::runtime_error("RUN requires a loaded, stopped program (RESET after a fault)");cancel=false;error.clear();auto now=Clock::now();for(auto&t:tasks){t.last={};t.next=now+(t.def->kind==PLC_CYCLIC?std::chrono::microseconds(t.def->period_us):std::chrono::microseconds(0));}startupPending=true;state="RUN";}
-    void stop(){if(memory)memory->safeOutputs();if(state!="EMPTY"&&state!="FAULT")state="STOP";}
+    void start(){if(state!="STOP")throw std::runtime_error("RUN requires a loaded, stopped program (RESET after a fault)");cancel=false;error.clear();auto now=Clock::now();for(auto&t:tasks){t.last={};t.next=now+(t.def->kind==PLC_CYCLIC?std::chrono::microseconds(t.def->period_us):std::chrono::microseconds(0));}startupPending=true;state="RUN";++ioEpoch;}
+    void stop(){++ioEpoch;if(memory)memory->safeOutputs();if(state!="EMPTY"&&state!="FAULT")state="STOP";}
     int32_t checkpoint(){
         if(cancel)return -1;auto now=Clock::now();
         for(auto i:stack)if(std::chrono::duration_cast<std::chrono::microseconds>(now-tasks[i].started).count()>int64_t(tasks[i].def->watchdog_us)){fault("OB"+std::to_string(tasks[i].def->ob)+" watchdog exceeded");return -1;}
@@ -200,14 +200,14 @@ struct Runtime {
         if(startupPending){startupPending=false;for(size_t i=0;i<tasks.size();i++)if(tasks[i].def->kind==PLC_STARTUP&&!cancel)dispatch(i);}
         if(!cancel)serviceDue(0,false);
     }
-    void step(){if(state!="STOP")throw std::runtime_error("STEP requires STOP");cancel=false;for(size_t i=0;i<tasks.size();i++)if(tasks[i].def->kind==PLC_MAIN){dispatch(i);break;}if(memory)memory->safeOutputs();}
-    void reset(){if(state=="RUN")throw std::runtime_error("STOP before RESET");if(!memory)throw std::runtime_error("no program loaded");memory->reset();traces.clear();for(auto&t:tasks)t=TaskState{t.def};error.clear();state="STOP";cancel=false;memory->safeOutputs();}
+    void step(){if(state!="STOP")throw std::runtime_error("STEP requires STOP");++ioEpoch;cancel=false;for(size_t i=0;i<tasks.size();i++)if(tasks[i].def->kind==PLC_MAIN){dispatch(i);break;}if(memory)memory->safeOutputs();}
+    void reset(){if(state=="RUN")throw std::runtime_error("STOP before RESET");if(!memory)throw std::runtime_error("no program loaded");++ioEpoch;memory->reset();traces.clear();for(auto&t:tasks)t=TaskState{t.def};error.clear();state="STOP";cancel=false;memory->safeOutputs();}
     std::string snapshot(){
-        std::ostringstream o;o.precision(15);o<<"{\"ok\":true,\"state\":"<<q(state)<<",\"fault\":"<<q(error);
+        std::ostringstream o;o.precision(17);o<<"{\"ok\":true,\"state\":"<<q(state)<<",\"io_epoch\":"<<ioEpoch<<",\"fault\":"<<q(error);
         if(module){auto*p=module->program;o<<",\"program\":"<<q(p->name)<<",\"build_id\":"<<q(p->build_id)<<",\"tasks\":[";
             for(size_t i=0;i<tasks.size();i++){auto&t=tasks[i];o<<(i?",":"")<<"{\"name\":"<<q(t.def->name)<<",\"ob\":"<<t.def->ob<<",\"period_us\":"<<t.def->period_us<<",\"priority\":"<<t.def->priority<<",\"cycles\":"<<t.cycles<<",\"last_us\":"<<t.last_us<<",\"max_us\":"<<t.max_us<<",\"missed\":"<<t.missed<<",\"overruns\":"<<t.overruns<<",\"jitter_us\":"<<t.jitter_us<<"}";}
             o<<"],\"tags\":[";bool first=true;
-            for(uint32_t i=0;i<p->tag_count;i++){auto&d=p->tags[i];if(std::string(d.name).starts_with("__plc_")||std::string(d.name).find(".__plc_tmp_")!=std::string::npos)continue;auto v=memory->read(i);o<<(first?"":",")<<"{\"id\":"<<i<<",\"name\":"<<q(d.name)<<",\"type\":"<<q(tags::toString(static_cast<tags::TypeId>(d.type)))<<",\"type_id\":"<<d.type<<",\"address\":"<<q(d.address?d.address:"")<<",\"value\":";
+            for(uint32_t i=0;i<p->tag_count;i++){auto&d=p->tags[i];if(std::string(d.name).starts_with("__plc_")||std::string(d.name).find(".__plc_tmp_")!=std::string::npos)continue;auto v=memory->read(i);o<<(first?"":",")<<"{\"id\":"<<i<<",\"name\":"<<q(d.name)<<",\"type\":"<<q(tags::toString(static_cast<tags::TypeId>(d.type)))<<",\"type_id\":"<<d.type<<",\"area\":"<<d.area<<",\"address\":"<<q(d.address?d.address:"")<<",\"value\":";
                 if(v.type==PLC_STRING)o<<q(v.text);else if(v.type==PLC_BOOL)o<<(v.integer?"true":"false");else if(v.type==PLC_REAL||v.type==PLC_LREAL)o<<v.real;else o<<v.integer;o<<"}";first=false;}
             o<<"],\"networks\":[";first=true;for(auto&[key,t]:traces){o<<(first?"":",")<<"{\"id\":"<<key.first<<",\"scope\":"<<q(key.second)<<",\"count\":"<<t.count<<",\"power\":"<<(t.power?"true":"false")<<"}";first=false;}o<<"]";
         }
@@ -241,6 +241,32 @@ int main(){
             else if(cmd=="STOP")runtime.stop();
             else if(cmd=="RESET")runtime.reset();
             else if(cmd=="STEP")runtime.step();
+            else if(cmd=="IOWRITE"||cmd=="IOFAULT"){
+                std::istringstream input(arg);std::string build;uint64_t epoch;
+                if(!(input>>build>>epoch)||!runtime.module||build!=runtime.module->program->build_id||epoch!=runtime.ioEpoch)
+                    throw std::runtime_error("stale I/O generation");
+                if(cmd=="IOFAULT"){
+                    std::string link;input>>link;if(runtime.state=="RUN")runtime.fault("I/O connection failed: "+link);
+                }else{
+                    uint32_t count;if(!(input>>count)||count>128)throw std::runtime_error("invalid I/O batch size");
+                    std::vector<std::pair<uint32_t,PlcValue>> values;std::set<uint32_t> ids;
+                    for(uint32_t i=0;i<count;i++){
+                        uint32_t id;std::string text;
+                        if(!(input>>id>>text)||id>=runtime.module->program->tag_count||!ids.insert(id).second)
+                            throw std::runtime_error("invalid I/O tag ID");
+                        auto& d=runtime.module->program->tags[id];std::string name=d.name;
+                        if(d.area==PLC_OUTPUT||d.type==PLC_STRING||name.starts_with("System.")||name.starts_with("__plc_")||name.find(".__plc_")!=std::string::npos)
+                            throw std::runtime_error("I/O input tag is not writable");
+                        PlcValue v{};v.type=d.type;size_t consumed=0;
+                        if(v.type==PLC_REAL||v.type==PLC_LREAL)v.real=std::stod(text,&consumed);else v.integer=std::stoll(text,&consumed);
+                        if(consumed!=text.size())throw std::runtime_error("invalid I/O numeric value");
+                        validateValue(v);values.emplace_back(id,v);
+                    }
+                    std::string extra;if(input>>extra)throw std::runtime_error("trailing I/O batch data");
+                    for(auto& [id,value]:values)runtime.memory->write(id,value);
+                }
+                std::cout<<"{\"ok\":true}"<<std::endl;continue;
+            }
             else if(cmd=="SET"){
                 if(!runtime.memory)throw std::runtime_error("no program loaded");
                 std::istringstream input(arg);uint32_t id;std::string value;if(!(input>>id>>value)||id>=runtime.module->program->tag_count)throw std::runtime_error("invalid write request");
